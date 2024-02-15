@@ -1,16 +1,16 @@
-import sys
-import os
 import csv
 import math
 import statistics
 from datetime import datetime as dt
 from pathlib import Path
 from collections import OrderedDict
+from typing import NamedTuple
 import numpy as np
 import cv2
 from cv2 import aruco
 import matplotlib.pyplot as plt
 
+version = __version__ = "0.62"
 
 # ======================================================================
 # 定数
@@ -58,8 +58,152 @@ Order of 7 segments:
 # --> Frame dictionary = {TLw:0,TLh:0,TRw:400,TRh:0,BLw:0,BLh:300,BRw:400,BRh:300}
 #=============================================
 """
-FRAME_NAMES = {'TLw','TLh','TRw','TRh','BLw','BLh','BRw','BRh'}
 ARUCO_DICT = aruco.getPredefinedDictionary(aruco.DICT_4X4_50) # 4X4のマーカーを50個
+
+# ======================================================================
+
+class Corners(NamedTuple):
+    TLw: float
+    TLh: float
+    TRw: float
+    TRh: float
+    BLw: float
+    BLh: float
+    BRw: float
+    BRh: float
+
+    @classmethod
+    def _from_2corners(cls, TLw, TLh, BRw, BRh):
+        """左上・右下の座標のみ使う
+        """
+        return cls(TLw,TLh,BRw,TLh,TLw,BRh,BRw,BRh)
+
+    @classmethod
+    def _from_aruco_markers(cls, img, aruco_ids):
+        """画像のarucoマーカーを検出してトリミングする座標を決定する
+        aruco_ids: [左上、右上、右下、左下]
+        ※各マーカーの内側の角から、さらに内側にシフトした位置をトリミング座標にする
+        ※マーカーの周囲に白い枠が必要だが、白い枠は検出対象外＆数字検出時に不都合が生じるので削っている
+        """
+        id_set = set(aruco_ids)
+        params = aruco.DetectorParameters()
+        params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_CONTOUR # 場合によってはこちらのほうがよい&はやい
+        aruco_corners, ids, _ = aruco.detectMarkers(img,ARUCO_DICT,parameters=params)
+        if set(ids.T[0]) != id_set:
+            # 四隅を検出できない場合は、パラメータを調整して再チャレンジ
+            params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_APRILTAG # 広角レンズで歪むときは正確（処理はおそい）
+            aruco_corners, ids, _ = aruco.detectMarkers(img,ARUCO_DICT,parameters=params)
+            if set(ids.T[0]) != id_set:
+                return None
+        b = [aruco_corners[np.where(ids==aruco_ids[i])[0][0]][0][i] for i in [0,1,2,3]] # 外側の角 ※角Noはidの並びと同じ
+        a = [aruco_corners[np.where(ids==aruco_ids[i])[0][0]][0][j] for i,j in enumerate([2,3,0,1])] # 内側の角
+        pos = [i+(i-j)/7 for i,j in zip(a,b)] # 内側に向けて白い部分を削るように座標補正
+        corners = {}
+        for i,k in enumerate(('TL','TR','BR','BL')):
+            corners[f'{k}w'] = round(pos[i][0])
+            corners[f'{k}h'] = round(pos[i][1])
+        return cls(**corners)
+
+    def _position_type(self):
+        if all((0<=v<=1 for v in self._asdict().values())):
+            return 'ratio'
+        else:
+            return 'abs'
+
+    def _array(self, fieldname):
+        w = getattr(self,f'{fieldname}w')
+        h = getattr(self,f'{fieldname}h')
+        return np.array((w,h))
+
+    def _get_size(self, fullsizeh=None,fullsizew=None):
+        TR = self._array('TR')
+        TL = self._array('TL')
+        BL = self._array('BL')
+        if self._position_type == 'ratio':
+            if fullsizeh is None or fullsizew is None:
+                raise ValueError
+            fullsize = (fullsizeh, fullsizew)
+            TR *= fullsize
+            TL *= fullsize
+            BL *= fullsize
+        wid = round(np.linalg.norm(TR - TL))
+        hei = round(np.linalg.norm(BL - TL))
+        return (wid, hei)
+
+    @classmethod
+    def _correct_angles(cls,corners, angle=0):
+        """平行四辺形補正：左上と右下の座標と傾き角度から右上と左下座標を補正する
+        右上と左下が空欄でも入力済みでも無視"""
+        c = corners
+        if angle == 0:
+            return Corners(c.TLw,c.TLh,c.BRw,c.TLh,c.TLw,c.BRh,c.BRw,c.BRh)
+        # 傾きがある場合は再計算
+        TR = np.array((c.BRw,c.TLh))
+        BL = np.array((c.TLw,c.BRh))
+        TL = c._array('TL')
+        BR = c._array('BR')
+        yokoT_vector = (TR - TL) / np.linalg.norm(TR - TL)
+        yokoB_vector = (BR - BL) / np.linalg.norm(BR - BL)
+        tateL_distance = np.linalg.norm(BL - TL)
+        tateR_distance = np.linalg.norm(BR - TR)
+        tmp_TR = TR + yokoT_vector * tateR_distance * math.tan(math.radians(angle))
+        tmp_BL = BL - yokoB_vector * tateL_distance * math.tan(math.radians(angle))
+        # 整数変換
+        TRw = round(tmp_TR[0])
+        TRh = round(tmp_TR[1])
+        BLw = round(tmp_BL[0])
+        BLh = round(tmp_BL[1])
+        return Corners(c.TLw,c.TLh,TRw,TRh,BLw,BLh,c.BRw,c.BRh)
+
+    def _calc_transform_matrix(self):
+        """トリミング用の座標変換行列を作成
+        ratio の場合は使用しない"""
+        tr = [self._array(x) for x in ('TL','TR','BR','BL')]
+        p_original = np.array(tr, dtype=np.float32)
+        wid, hei = self._get_size()
+        p_trans = np.array([[0,0],[wid,0],[wid,hei],[0,hei]], dtype=np.float32)
+        trans_mat = cv2.getPerspectiveTransform(p_original,p_trans)
+        trans_size = (wid,hei)
+        return trans_mat, trans_size
+
+
+
+class Display:
+    """4点で囲まれた範囲の切り抜き
+    """
+    def __init__(self,position_type='full',corners=None,aruco_ids=[]):
+        self.position_type = position_type
+        self.corners = corners
+        self.aruco_ids = aruco_ids
+        self.trans_matrix = []
+
+    def trim(self, original_image):
+        if self.position_type == 'full':
+            return original_image
+        elif self.position_type == 'abs':
+            return trim_image(original_image, self.corners)
+        elif self.position_type == 'ratio':
+            return self.trim_from_ratio(original_image)
+        elif self.position_type == 'aruco':
+            self.corners = Corners.from_aruco_markers(original_image)
+            self.corners._calc_transform_matrix()
+            return cv2.warpPerspective(original_image, self.trans_matrix, self.get_image_size(), flags=cv2.INTER_CUBIC)
+        else:
+            raise ValueError
+
+    def trim_from_ratio(self, original_image):
+        if len(original_image.shape) == 2:
+            fullsizeh, fullsizew = original_image.shape
+        elif len(original_image.shape) == 3:
+            fullsizeh, fullsizew, _ = original_image.shape
+        wid, hei = self.corners._get_size(fullsizeh, fullsizew)
+        tr = [self.corners._array(x) for x in ('TL','TR','BR','BL')]
+        p_original = np.array(tr, dtype=np.float32)
+        p_trans = np.array([[0,0],[wid,0],[wid,hei],[0,hei]], dtype=np.float32)
+        trans_matrix = cv2.getPerspectiveTransform(p_original,p_trans)
+        return cv2.warpPerspective(original_image, trans_matrix, (wid,hei), flags=cv2.INTER_CUBIC)
+
+
 
 # ======================================================================
 # 画像処理汎用
@@ -77,32 +221,6 @@ def rotate_image(img,angle:int=0):
     rotated_img = cv2.rotate(img,rrr)
     return rotated_img
 
-def correct_corner_angles(corners,angle:int=0):
-    """平行四辺形補正：左上と右下の座標と傾き角度から右上と左下座標を補正する
-    右上と左下が空欄でも入力済みでも無視"""
-    if angle == 0: # 傾きなし
-        corners['TRw'] = corners['BRw']
-        corners['TRh'] = corners['TLh']
-        corners['BLw'] = corners['TLw']
-        corners['BLh'] = corners['BRh']
-        return corners
-    # numpy の座標計算に便利なarray形式に変換
-    trarr = {x:np.array((corners[f'{x}w'],corners[f'{x}h'])) for x in ('TL','BR')}
-    # 傾きがある場合は再計算
-    trarr['TR'] = np.array((corners['BRw'],corners['TLh']))
-    trarr['BL'] = np.array((corners['TLw'],corners['BRh']))
-    yokoT_vector = (trarr['TR'] - trarr['TL']) / np.linalg.norm(trarr['TR'] - trarr['TL'])
-    yokoB_vector = (trarr['BR'] - trarr['BL']) / np.linalg.norm(trarr['BR'] - trarr['BL'])
-    tateL_distance = np.linalg.norm(trarr['BL'] - trarr['TL'])
-    tateR_distance = np.linalg.norm(trarr['BR'] - trarr['TR'])
-    tmp_TR = trarr['TR'] + yokoT_vector * tateR_distance * math.tan(math.radians(angle))
-    tmp_BL = trarr['BL'] - yokoB_vector * tateL_distance * math.tan(math.radians(angle))
-    # cv2 (numpy) の座標取得用に整数変換
-    corners['TRw'] = round(tmp_TR[0])
-    corners['TRh'] = round(tmp_TR[1])
-    corners['BLw'] = round(tmp_BL[0])
-    corners['BLh'] = round(tmp_BL[1])
-    return corners
 
 def calculate_thresh_auto(img,morpho=True,white=255):
     arr = img
@@ -152,11 +270,9 @@ def __cut_zeros(x_array):
 
 def __calc_transform_mat(corners):
     """トリミング用の座標変換行列を作成"""
-    t = corners
-    tr = [(t[f'{x}w'], t[f'{x}h']) for x in ('TL','TR','BR','BL')]
+    tr = [corners._array(x) for x in ('TL','TR','BR','BL')]
     p_original = np.array(tr, dtype=np.float32)
-    wid = round(np.linalg.norm(np.array((t['TRw'],t['TRh'])) - np.array((t['TLw'],t['TLh']))))
-    hei = round(np.linalg.norm(np.array((t['BLw'],t['BLh'])) - np.array((t['TLw'],t['TLh']))))
+    wid, hei = corners._get_size() ############## fullsize
     p_trans = np.array([[0,0],[wid,0],[wid,hei],[0,hei]], dtype=np.float32)
     trans_mat = cv2.getPerspectiveTransform(p_original,p_trans)
     trans_size = (wid,hei)
@@ -169,41 +285,17 @@ def __transform(img, trans_mat,trans_size):
     else:
         return cv2.warpPerspective(img, trans_mat, trans_size, flags=cv2.INTER_CUBIC)
 
-def find_aruco_markers(img, aruco_ids):
-    """画像のarucoマーカーを検出してトリミングする座標を決定する
-    aruco_ids: [左上、右上、右下、左下]
-    ※各マーカーの内側の角から、さらに内側にシフトした位置をトリミング座標にする
-    ※マーカーの周囲に白い枠が必要だが、白い枠は検出対象外＆数字検出時に不都合が生じるので削っている
-    """
-    id_set = set(aruco_ids)
-    params = aruco.DetectorParameters()
-    params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_CONTOUR # 場合によってはこちらのほうがよい&はやい
-    aruco_corners, ids, _ = aruco.detectMarkers(img,ARUCO_DICT,parameters=params)
-    if set(ids.T[0]) != id_set:
-        # 四隅を検出できない場合は、パラメータを調整して再チャレンジ
-        params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_APRILTAG # 広角レンズで歪むときは正確（処理はおそい）
-        aruco_corners, ids, _ = aruco.detectMarkers(img,ARUCO_DICT,parameters=params)
-        if set(ids.T[0]) != id_set:
-            return None
-    b = [aruco_corners[np.where(ids==aruco_ids[i])[0][0]][0][i] for i in [0,1,2,3]] # 外側の角 ※角Noはidの並びと同じ
-    a = [aruco_corners[np.where(ids==aruco_ids[i])[0][0]][0][j] for i,j in enumerate([2,3,0,1])] # 内側の角
-    pos = [i+(i-j)/7 for i,j in zip(a,b)] # 内側に向けて白い部分を削るように座標補正
-    corners = {}
-    for i,k in enumerate(('TL','TR','BR','BL')):
-        corners[f'{k}w'] = round(pos[i][0])
-        corners[f'{k}h'] = round(pos[i][1])
-    return corners
-
 def trim_aruco_markers(img, aruco_ids):
-    corners = find_aruco_markers(img, aruco_ids)
+    """画像のarucoマーカーを使ってトリミング"""
+    corners = Corners._from_aruco_markers(img, aruco_ids)
     trans_mat, trans_size = __calc_transform_mat(corners)
-    check_img_trimed = __transform(img,trans_mat, trans_size)
-    return check_img_trimed
+    img_trimed = __transform(img,trans_mat, trans_size)
+    return img_trimed
 
 def trim_image(img,corners,autocorrect=False):
     trans_mat, trans_size = __calc_transform_mat(corners)
-    check_img_trimed = __transform(img,trans_mat, trans_size)
-    return check_img_trimed
+    img_trimed = __transform(img,trans_mat, trans_size)
+    return img_trimed
 
 def search_segments(img):
 #    size = img.shape # imgがNoneでないとき
@@ -316,7 +408,7 @@ def find_good_angle(original_img,corners,angle=0):
     zero_num_list = []
     angle_range = range(-11,21)
     for i,r in enumerate(angle_range):
-        dd = correct_corner_angles(corners,r)
+        dd = Corners._correct_angles(corners,r)
         
         im_trim = trim_image(original_img, dd, angle)
         th = calculate_thresh_auto(im_trim)
@@ -332,7 +424,7 @@ def find_good_angle(original_img,corners,angle=0):
 #        if i == 0 or zeros > count:
 #            count = zeros
 #            rr = r
-    dr = correct_corner_angles(corners, rr)
+    dr = Corners._correct_angles(corners,rr)
     return rr, dr
 
 def testprint(x,y):
@@ -392,10 +484,4 @@ def get_videotime(videolist, videofilelist, sec):
             s -= max_frame / fps
             continue
 
-if __name__ == '__main__':
-    d = r'C:\Users\asada\Dropbox\eps\p\RecDigits\iroiro\TMP_hicube_eco'
-    flist = [f for f in Path(d).glob('*.jpg')]
-    z = {x:y for x,y in zip(FRAME_NAMES,(30,88,210,88,2,219,182,219))}
-    im = cv2.imread(flist[10].resolve().as_posix(),0)
-    
 

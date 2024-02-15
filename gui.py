@@ -1,4 +1,5 @@
 from readdigits import *
+import os
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from idlelib.tooltip import Hovertip
@@ -45,6 +46,7 @@ def modify_dpi():
         ctypes.windll.shcore.SetProcessDpiAwareness(True)
 modify_dpi()
 
+FRAME_NAMES = Corners._fields
 
 class App(tk.Frame):
     def __init__(self, master=None):
@@ -539,9 +541,9 @@ class App(tk.Frame):
 #            r = self.val['rhombic'].get()
         except:
             return # 空欄など入力ミスのときは何もしない
-        d = correct_corner_angles(d,0)
+        d = Corners._correct_angles(Corners(**d),0)
         for k in ('TRw','BLw','TRh','BLh'):
-            self.val[f'trim{n}_{k}'].set(d[k])
+            self.val[f'trim{n}_{k}'].set(getattr(d,k))
 
     def button_show_trimming_img(self):
         # 座標指定したトリミング範囲の図と枠線を表示
@@ -551,7 +553,7 @@ class App(tk.Frame):
         angle = self.val['rotate'].get()
         current_tab = self.get_current_trimtab()
         for n in range(MAX_TAB_NUM):
-            d = self.get_trimarea(n)
+            d = Corners(**self.get_trimarea(n))
             print(f'button_pressed.  {n}')
             if not self.val[f'use_frame{n}'].get():
                 continue
@@ -561,9 +563,9 @@ class App(tk.Frame):
                     r, d = find_good_angle(self.check_image, d)
                     # 対角の座標を自動入力
                     for k in ('TRw','BLw','TRh','BLh'):
-                        self.val[f'trim{n}_{k}'].set(d[k])
+                        self.val[f'trim{n}_{k}'].set(getattr(d,k))
                 trimed_image = trim_image(self.check_image,d,autocorrect=False)
-                wid, hei = d['TLw'], d['TLh']
+                wid, hei = d.TLw, d.TLh
                 self.trim_mod_x, self.trim_mod_y = wid, hei
                 name = f'trimming{n}'
                 self.ax[name].imshow(trimed_image,cmap='gray')
@@ -593,7 +595,7 @@ class App(tk.Frame):
         self.clear_graph(name)
         # 他2つの画像がロードできているかどうかにかかわらず、一通りの処理を実行する
         im = self.get_check_img()
-        d = self.get_trimarea()
+        d = Corners(**self.get_trimarea())
         
         trimed_img = trim_image(im,d,autocorrect=False)
         th = calculate_thresh_auto(trimed_img)
@@ -615,12 +617,13 @@ class App(tk.Frame):
     def read_alldata(self):
         savepath = Path(self.val['save_dir'].get()) / Path(self.val['save_fname'].get()+'.csv')
         n = 0
-        d = self.get_trimarea(n)
+        d = Corners(**self.get_trimarea(n))
 #        angle = self.val['rotate'].get()
 
         results = []
         mode = self.val['imgtype'].get()
         preprocess_aruco = self.val['aruco0'].get()
+        st = dt.now()
         markers = [int(x) for x in self.val['aruco0_marker'].get().split('-')]
         if mode == 'image':
             records = OrderedDict([(x, self.val[f'rec_{x}'].get()) 
@@ -715,6 +718,8 @@ class App(tk.Frame):
         max_num = self.val[f'max_num{n}'].get()
 
         self.val['progress_txt'].set('complete.')
+        en = dt.now()
+        print((en.timestamp()-st.timestamp()))
         """
         ### テスト中：まだエラーが出る
         good_results_list = [(x['txt'],x['segments'],x['coordinates']) for x in results if not math.isnan(x['value'])]
