@@ -264,7 +264,6 @@ class App(tk.Frame):
             #self.tabs_trim.append(ft)
             self.notebook_trim.add(ft,text=f' 数字枠{x+1} ')
             self.val[f'result{x}'] = tk.StringVar(self.master,value='')
-            self.val[f'trim{x}_auto_correction'] = tk.IntVar(self.master, value=1)
             self.val[f'min{x}'] = tk.IntVar(self.master, value=0)
             self.val[f'max{x}'] = tk.IntVar(self.master, value=0)
             self.val[f'check_witheyes{x}'] = tk.IntVar(self.master, value=0)
@@ -311,9 +310,7 @@ class App(tk.Frame):
                 self.wid[f'trim{x}_{v[0]}h'].grid(row=v[1],column=v[2]+2,**pads2)
             fff.pack(**framepads,**expandx,)
             fff = ttk.Frame(ff)
-            ttk.Checkbutton(fff,text='座標自動補正',variable=self.val[f'trim{x}_auto_correction']).pack(**pads2,side=tk.LEFT)
-            fff.pack(**framepads,**expandx,)
-            b = ttk.Button(fff,text='表示 & 読み取りテスト',style="TButton",command=self.button_show_trimming_img)
+            b = ttk.Button(fff,text='座標自動補正',style="TButton",command=self.button_autocorrection)
             b.pack(**pads4,side=tk.LEFT)
             txt =  'トリミング用の座標指定： （横、縦）\n\n 左上と右下は必須\n'
             txt += '数字と小数点のラインが重ならず、グリッドに沿うように範囲を調整してください。\n\n'
@@ -322,6 +319,7 @@ class App(tk.Frame):
             Hovertip(ff,txt)
             t = tk.Label(fff,textvariable=self.val[f'result{x}'],fg="red",font=('',15))
             t.pack(**pads2,side=tk.LEFT)
+            fff.pack(**framepads,**expandx,)
             ff.pack(**framepads,**expandx)
             ff = ttk.LabelFrame(f,text='値取得方法')
             fv = ttk.Frame(ff)
@@ -336,7 +334,6 @@ class App(tk.Frame):
             Hovertip(fv,'最大・最小値から外れた値をnanにします。')
             ff.pack(**framepads,**expandx,)
             
-            self.val[f'trim{x}_auto_correction'].trace_add('write',self.update_trimarea_view)
         
         w = ttk.Frame(self.tabs[tb])
         f = ttk.Frame(w)
@@ -542,7 +539,7 @@ class App(tk.Frame):
         for k in ('TRw','BLw','TRh','BLh'):
             self.val[f'trim{n}_{k}'].set(getattr(d,k))
 
-    def button_show_trimming_img(self):
+    def button_autocorrection(self):
         # 座標指定したトリミング範囲の図と枠線を表示
         if self.check_image is None:
             self.clear_graphs()
@@ -556,11 +553,12 @@ class App(tk.Frame):
                 continue
             # 座標を自動計算
             if n == current_tab:
-                if self.val[f'trim{n}_auto_correction'].get():
-                    d = find_good_angle(self.check_image, d)
-                    # 対角の座標を自動入力
-                    for k in ('TRw','BLw','TRh','BLh'):
-                        self.val[f'trim{n}_{k}'].set(getattr(d,k))
+                # auto correction
+                d = find_good_angle(self.check_image, d)
+                # 対角の座標を自動入力
+                for k in ('TRw','BLw','TRh','BLh'):
+                    self.val[f'trim{n}_{k}'].set(getattr(d,k))
+
                 trimed_image = trim_image(self.check_image,d)
                 wid, hei = d.TLw, d.TLh
                 self.trim_mod_x, self.trim_mod_y = wid, hei
@@ -616,7 +614,10 @@ class App(tk.Frame):
         angle = self.val['rotate'].get()
         results = []
         displays_lookup = [n for n in range(MAX_TAB_NUM) if self.val[f'type{n}'].get() != NO_USE]
-        corners = [Corners(**self.get_trimarea(tabnum)) for tabnum in displays_lookup]
+        corners = {tabnum: Corners(**self.get_trimarea(tabnum)) for tabnum in displays_lookup}
+        displays = {tabnum: Display() for tabnum in displays_lookup}
+        for tabnum, d in displays.items():
+            d.set_ratio(self.check_image, corners[tabnum])
 
         mode = self.val['imgtype'].get()
         preprocess_aruco = self.val['aruco0'].get()
@@ -650,7 +651,8 @@ class App(tk.Frame):
                 if preprocess_aruco:
                     im = trim_aruco_markers(im, markers)
                 for tabnum in displays_lookup:
-                    valueread, _, _ = get_digit(im,corners[tabnum])
+                    c = displays[tabnum].get_corners_from_ratio(im)
+                    valueread, _, _ = get_digit(im,c)
                     temp[f'txt{tabnum}'] = valueread
                 results.append(temp)
         else:
@@ -686,7 +688,8 @@ class App(tk.Frame):
                     'file_time': vt_filetime,
                     }
                 for tabnum in displays_lookup:
-                    valueread, _, _ = get_digit(im,corners[tabnum])
+                    c = displays[tabnum].get_corners_from_ratio(im)
+                    valueread, _, _ = get_digit(im,c)
                     temp[f'txt{tabnum}'] = valueread
                 results.append(temp)
         for num in displays_lookup:
@@ -730,20 +733,6 @@ class App(tk.Frame):
         # 座標取得
         return {f'{k}':self.val[f'trim{n}_{k}'].get() for k in FRAME_NAMES}
 
-    def update_trimarea_view(self,*args):
-        # 自動補正モードのとき座標の対角を入力不可にする
-        n = self.get_current_trimtab()
-        if self.val[f'trim{n}_auto_correction'].get() == 1:
-            st = 'disabled'
-            for k in ('TLw','TLh','BRw','BRh'):
-                self.tid[f'trim{n}_{k}'] = self.val[f'trim{n}_{k}'].trace_add('write',self.update_trim_area)
-        else:
-            st = 'normal'
-            for k in ('TLw','TLh','BRw','BRh'):
-                self.val[f'trim{n}_{k}'].trace_remove('write',self.tid[f'trim{n}_{k}'])
-        for x in ('TRw','TRh','BLw','BLh'):
-            self.wid[f'trim{n}_{x}'].config(state=st)
-
     def get_coordinate_check(self, event):
         if event.xdata is None: return
         x = int(event.xdata)
@@ -768,7 +757,7 @@ class App(tk.Frame):
     def get_current_trimtab(self):
         tab_id = self.notebook_trim.select()
         tab_txt = self.notebook_trim.tab(tab_id,'text')
-        num = int(tab_txt[-2]) -1
+        num = int(tab_txt.strip()[-1]) -1
         return num
 
 # ======================================================================

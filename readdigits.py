@@ -79,13 +79,6 @@ class Corners(NamedTuple):
         return cls(TLw,TLh,BRw,TLh,TLw,BRh,BRw,BRh)
 
     @classmethod
-    def _from_2corners_ratio(cls, TLw, TLh, BRw, BRh, img):
-        """左上・右下の座標のみ使う
-        """
-        w,h,*other = img.shape
-        return cls(TLw/w,TLh/h,BRw/w,TLh/h,TLw/w,BRh/h,BRw/w,BRh/h)
-
-    @classmethod
     def _from_aruco_markers(cls, img, aruco_ids):
         """画像のarucoマーカーを検出してトリミングする座標を決定する
         aruco_ids: [左上、右上、右下、左下]
@@ -126,13 +119,6 @@ class Corners(NamedTuple):
         TR = self._array('TR')
         TL = self._array('TL')
         BL = self._array('BL')
-        if self._position_type == 'ratio':
-            if fullsizeh is None or fullsizew is None:
-                raise ValueError
-            fullsize = (fullsizeh, fullsizew)
-            TR *= fullsize
-            TL *= fullsize
-            BL *= fullsize
         wid = round(np.linalg.norm(TR - TL))
         hei = round(np.linalg.norm(BL - TL))
         return (wid, hei)
@@ -184,36 +170,50 @@ class Corners(NamedTuple):
 class Display:
     """4点で囲まれた範囲の切り抜き
     """
-    def __init__(self,position_type='full',corners=None,aruco_ids=[]):
-        self.position_type = position_type
+    def __init__(self,corners=None,aruco_ids=[],corners_ratio=None):
         self.corners = corners
+        self.corners_ratio = corners_ratio
         self.aruco_ids = aruco_ids
-        self.trans_matrix = []
 
     def trim(self, original_image):
-        if self.position_type == 'full':
-            return original_image
-        elif self.position_type == 'abs':
-            return trim_image(original_image, self.corners)
-        elif self.position_type == 'ratio':
+        if self.corners_ratio is not None:
             return self.trim_from_ratio(original_image)
-        elif self.position_type == 'aruco':
+        elif len(self.aruco_ids) == 4:
             self.corners = Corners.from_aruco_markers(original_image)
             self.corners._calc_transform_matrix()
             return cv2.warpPerspective(original_image, self.trans_matrix, self.get_image_size(), flags=cv2.INTER_CUBIC)
+        elif self.corners is not None:
+            return trim_image(original_image, self.corners)
         else:
             raise ValueError
 
     def trim_from_ratio(self, original_image):
         fullsizeh, fullsizew, *other = original_image.shape # 白黒カラーどちらでも
-        wid, hei = self.corners._get_size(fullsizeh, fullsizew)
-        tr = [self.corners._array(x) for x in ('TL','TR','BR','BL')]
+        corners = self.get_corners_from_ratio(original_image)
+        wid, hei = corners._get_size(fullsizeh, fullsizew)
+        tr = [self.corners._array(x) for x in ('TL','TR','BR','BL')] # numpy用の順番
         p_original = np.array(tr, dtype=np.float32)
         p_trans = np.array([[0,0],[wid,0],[wid,hei],[0,hei]], dtype=np.float32)
         trans_matrix = cv2.getPerspectiveTransform(p_original,p_trans)
         return cv2.warpPerspective(original_image, trans_matrix, (wid,hei), flags=cv2.INTER_CUBIC)
 
+    def get_corners_from_ratio(self, original_image):
+        """ 割合換算された座標と全体画像からふつうの座標を生成
+        """
+        names = self.corners_ratio._fields
+        w,h,*other = original_image.shape
+        size = {'w':w, 'h':h}
+        c = {f: round(getattr(self.corners_ratio,f)*size[f[-1]]) for f in names}
+        return Corners(**c)
 
+    def set_ratio(self, original_image, corners):
+        """ ふつうの座標と全体画像から割合換算した座標を生成して保持
+        """
+        names = corners._fields
+        w,h,*other = original_image.shape
+        size = {'w':w, 'h':h}
+        c = {f: getattr(corners,f)/size[f[-1]] for f in names}
+        self.corners_ratio = Corners(**c)
 
 # ======================================================================
 # 画像処理汎用
@@ -348,21 +348,19 @@ def read_segment(img,max_height):
             return "-", None # 横長
         else:
             return ".", None
-    elif Sheight < max_height / 2:
+    elif Sheight * 1.8 < max_height:
         if 0.4 < aspect_rate < 3:
-            h, w = Sheight/3, Swidth/3
+            h, w = Sheight/3, Swidth/5
             darks = [
             np.average(img[0:int(h),0:int(w)]),
-            np.average(img[0:int(h),int(w*2):Swidth]),
+            np.average(img[0:int(h),int(w*4):Swidth]),
             np.average(img[int(h*2):Sheight,0:int(w)]),
-            np.average(img[int(h*2):Sheight,int(w*2):Swidth]),
+            np.average(img[int(h*2):Sheight,int(w*4):Swidth]),
             ]
             segments = [
-            np.average(img[0:int(h),int(w):int(w*2)]),
-            np.average(img[int(h):int(h*2),0:int(w)]),
-            np.average(img[int(h):int(h*2),int(w):int(w*2)]),
-            np.average(img[int(h):int(h*2),int(w*2):Swidth]),
-            np.average(img[int(h*2):Sheight,int(w):int(w*2)]),
+            np.average(img[0:int(h),int(w*2):int(w*3)]),
+            np.average(img[int(h):int(h*2),0:Swidth]),
+            np.average(img[int(h*2):Sheight,int(w*2):int(w*3)]),
             ]
             if all((all((d<s for d in darks)) for s in segments)):
                 return "+", None
