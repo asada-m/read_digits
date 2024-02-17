@@ -79,6 +79,13 @@ class Corners(NamedTuple):
         return cls(TLw,TLh,BRw,TLh,TLw,BRh,BRw,BRh)
 
     @classmethod
+    def _from_2corners_ratio(cls, TLw, TLh, BRw, BRh, img):
+        """左上・右下の座標のみ使う
+        """
+        w,h,*other = img.shape
+        return cls(TLw/w,TLh/h,BRw/w,TLh/h,TLw/w,BRh/h,BRw/w,BRh/h)
+
+    @classmethod
     def _from_aruco_markers(cls, img, aruco_ids):
         """画像のarucoマーカーを検出してトリミングする座標を決定する
         aruco_ids: [左上、右上、右下、左下]
@@ -166,6 +173,12 @@ class Corners(NamedTuple):
         trans_size = (wid,hei)
         return trans_mat, trans_size
 
+    def _get_corners(self,img):
+        w,h,*other = img.shape
+        size = {'w':w, 'h':h}
+        c = {f: round(getattr(self,f)*size[f[-1]]) for f in self._fields}
+        print(c)
+        return c
 
 
 class Display:
@@ -192,10 +205,7 @@ class Display:
             raise ValueError
 
     def trim_from_ratio(self, original_image):
-        if len(original_image.shape) == 2:
-            fullsizeh, fullsizew = original_image.shape
-        elif len(original_image.shape) == 3:
-            fullsizeh, fullsizew, _ = original_image.shape
+        fullsizeh, fullsizew, *other = original_image.shape # 白黒カラーどちらでも
         wid, hei = self.corners._get_size(fullsizeh, fullsizew)
         tr = [self.corners._array(x) for x in ('TL','TR','BR','BL')]
         p_original = np.array(tr, dtype=np.float32)
@@ -221,6 +231,10 @@ def rotate_image(img,angle:int=0):
     rotated_img = cv2.rotate(img,rrr)
     return rotated_img
 
+def testimshow(im):
+    f,a = plt.subplots()
+    a.imshow(im,cmap='gray')
+    plt.show()
 
 def calculate_thresh_auto(img,morpho=True,white=255):
     arr = img
@@ -292,7 +306,7 @@ def trim_aruco_markers(img, aruco_ids):
     img_trimed = __transform(img,trans_mat, trans_size)
     return img_trimed
 
-def trim_image(img,corners,autocorrect=False):
+def trim_image(img,corners):
     trans_mat, trans_size = __calc_transform_mat(corners)
     img_trimed = __transform(img,trans_mat, trans_size)
     return img_trimed
@@ -329,13 +343,31 @@ def read_segment(img,max_height):
     mid = (int(Swidth/2)-wid, int(Swidth/2)+wid)
     upp = (int(Sheight*0.25)-hei, int(Sheight*0.25)+hei)
     dwn = (int(Sheight*0.75)-hei, int(Sheight*0.75)+hei)
-    if Sheight < max_height / 5:
-        if aspect_rate < 0.3:
+    if Sheight * 5 < max_height:
+        if aspect_rate < 0.4:
             return "-", None # 横長
         else:
             return ".", None
     elif Sheight < max_height / 2:
-        return "", None # +/-も読めるようにしたい
+        if 0.4 < aspect_rate < 3:
+            h, w = Sheight/3, Swidth/3
+            darks = [
+            np.average(img[0:int(h),0:int(w)]),
+            np.average(img[0:int(h),int(w*2):Swidth]),
+            np.average(img[int(h*2):Sheight,0:int(w)]),
+            np.average(img[int(h*2):Sheight,int(w*2):Swidth]),
+            ]
+            segments = [
+            np.average(img[0:int(h),int(w):int(w*2)]),
+            np.average(img[int(h):int(h*2),0:int(w)]),
+            np.average(img[int(h):int(h*2),int(w):int(w*2)]),
+            np.average(img[int(h):int(h*2),int(w*2):Swidth]),
+            np.average(img[int(h*2):Sheight,int(w):int(w*2)]),
+            ]
+            if all((all((d<s for d in darks)) for s in segments)):
+                return "+", None
+        else:
+            return "", None # +/-も読めるようにしたい
     if aspect_rate >= 4:
         return "1", (0,0,1,0,0,1,0)
     elif 1.1 < aspect_rate < 4:
@@ -358,10 +390,10 @@ def read_segment(img,max_height):
             return "*", t
     else: return "", None
 
-def get_digit(im, corners,autocorrect=False):
+def get_digit(im, corners):
     if im is None:
         return "", []
-    trimed_img = trim_image(im,corners,autocorrect)
+    trimed_img = trim_image(im,corners)
     th = calculate_thresh_auto(trimed_img)
     segs, coordinates = search_segments(th)
     max_height = max([x[1]-x[0] for x in coordinates])
@@ -402,30 +434,62 @@ def get_better_coordinates(good_results_list):
         print(f"{x_medians = }   {y_medians = }   {d_medians}")
 
 
-def find_good_angle(original_img,corners,angle=0):
+def find_separated_angles(original_img, corners):
     # 文字が縦に揃うとき、縦の和がゼロになる列数が最も多いと思われる
     count, rr = 0,0
     zero_num_list = []
     angle_range = range(-11,21)
     for i,r in enumerate(angle_range):
         dd = Corners._correct_angles(corners,r)
-        
-        im_trim = trim_image(original_img, dd, angle)
+        im_trim = trim_image(original_img, dd)
         th = calculate_thresh_auto(im_trim)
         tate_wa = np.sum(th,axis=0)
         yoko_wa = np.sum(th,axis=1)
         zeros_t = len(tate_wa)-np.count_nonzero(tate_wa)
-        zeros_y = len(yoko_wa)-np.count_nonzero(yoko_wa)############# 
+        zeros_y = len(yoko_wa)-np.count_nonzero(yoko_wa)
         zero_num_list.append(zeros_t)
     zero_angles = [r for r,x in zip(angle_range, zero_num_list) if x == max(zero_num_list)]
-    print(f"{zero_angles = }")
-    print(f"{zero_num_list = }")
-    rr = zero_angles[len(zero_angles)//2]
-#        if i == 0 or zeros > count:
-#            count = zeros
-#            rr = r
-    dr = Corners._correct_angles(corners,rr)
-    return rr, dr
+    return round(np.average(zero_angles))
+
+def find_lines(original_img, corners):
+    # 直線検出
+    im = trim_image(original_img, corners)
+    im = calculate_thresh_auto(im)
+    im = cv2.Canny(im, threshold1=10,threshold2=10,apertureSize=3)
+    sizemin = min(im.shape)
+    params = {
+        'rho': 1, # default
+        'theta': np.pi/360, # default
+        'threshold': max((sizemin//50, 2)), # 線として検出する点数
+        'minLineLength': max((sizemin//6, 5)), # 線として検出する最小長さ
+        'maxLineGap': max((sizemin//30, 1)), # 同一の線とみなす点の間隔
+        }
+    lines = cv2.HoughLinesP(im,**params)
+    if lines is not None and len(lines) > 0:
+        angles = [90 - math.atan2((L[0][3]-L[0][1]),(L[0][2]-L[0][0]))*(180/math.pi) for L in lines]
+        angles_vertical = [a for a in angles if abs(a) < 15]
+        if len(angles_vertical) > 0:
+            deg = round(np.average(angles_vertical))
+        else:
+            deg = 0
+    if deg == 0:
+        # 2回目
+        params['minLineLength'] = sizemin//10
+        lines = cv2.HoughLinesP(im,**params)
+        if lines is not None and len(lines) > 0:
+            angles = [90 - math.atan2((L[0][3]-L[0][1]),(L[0][2]-L[0][0]))*(180/math.pi) for L in lines]
+            angles_vertical = [a for a in angles if abs(a) < 15]
+            if len(angles_vertical) > 0:
+                deg = round(np.average(angles_vertical))
+    return deg
+
+def find_good_angle(original_img,corners):
+    angle_bg = find_separated_angles(original_img, corners)
+    corners_bg = Corners._correct_angles(corners,angle_bg)
+    angle_lines = find_lines(original_img, corners_bg)
+    corners_both = Corners._correct_angles(corners,angle_bg - angle_lines)
+    return corners_both
+
 
 def testprint(x,y):
     fig,ax = plt.subplots()

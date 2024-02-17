@@ -47,6 +47,7 @@ def modify_dpi():
 modify_dpi()
 
 FRAME_NAMES = Corners._fields
+NO_USE = '(使用しない)'
 
 class App(tk.Frame):
     def __init__(self, master=None):
@@ -115,7 +116,7 @@ class App(tk.Frame):
         self.val['progress_txt'].set('')
         self.wid['checkimg'].config(values=[])
         self.wid['checkvideo_sec'].config(values=[])
-        for x in range(3):
+        for x in range(MAX_TAB_NUM):
             self.val[f'result{x}'].set('')
             for v in FRAME_NAMES:
                 self.val[f'trim{x}_{v}'].set(0)
@@ -262,7 +263,6 @@ class App(tk.Frame):
             ft = ttk.Frame(self.notebook_trim,relief=tk.GROOVE)
             #self.tabs_trim.append(ft)
             self.notebook_trim.add(ft,text=f' 数字枠{x+1} ')
-            self.val[f'use_frame{x}'] = tk.IntVar(self.master, value=0)
             self.val[f'result{x}'] = tk.StringVar(self.master,value='')
             self.val[f'trim{x}_auto_correction'] = tk.IntVar(self.master, value=1)
             self.val[f'min{x}'] = tk.IntVar(self.master, value=0)
@@ -272,19 +272,16 @@ class App(tk.Frame):
             self.val[f'max{x}'].trace_add('write',self.update_minmax)
             self.val[f'min_num{x}'] = tk.DoubleVar(self.master, value=0)
             self.val[f'max_num{x}'] = tk.DoubleVar(self.master, value=0)
-            self.val[f'type{x}'] = tk.StringVar(self.master,value='数値')
+            self.val[f'type{x}'] = tk.StringVar(self.master,value=NO_USE)
 
             f = ttk.Frame(ft)
             ff = ttk.Frame(f)
 #            fff = tk.Frame(ff,background='red')
             fff = tk.Frame(ff)
-            w = ttk.Checkbutton(fff,text='使用する',variable=self.val[f'use_frame{x}'])
+            w = ttk.Combobox(fff,width=10,values=['(使用しない)','数値','指数部','文字列'],textvariable=self.val[f'type{x}'],state='readonly')
+            w.pack(**pads4,side=tk.LEFT)
             if x == 0:
-                w.config(state = 'disabled')
-                self.val[f'use_frame{x}'].set(1)
-            w.pack(**pads4,side=tk.LEFT)
-            w = ttk.Combobox(fff,width=10,values=['数値','指数部','ON/OFF'],textvariable=self.val[f'type{x}'],state='readonly')
-            w.pack(**pads4,side=tk.LEFT)
+                self.val[f'type{x}'].set('数値')
             fff.pack()
             name = f'trimming{x}'
             figsize[name] = figsize['trimming']
@@ -555,16 +552,16 @@ class App(tk.Frame):
         for n in range(MAX_TAB_NUM):
             d = Corners(**self.get_trimarea(n))
             print(f'button_pressed.  {n}')
-            if not self.val[f'use_frame{n}'].get():
+            if self.val[f'type{n}'].get() == NO_USE:
                 continue
             # 座標を自動計算
             if n == current_tab:
                 if self.val[f'trim{n}_auto_correction'].get():
-                    r, d = find_good_angle(self.check_image, d)
+                    d = find_good_angle(self.check_image, d)
                     # 対角の座標を自動入力
                     for k in ('TRw','BLw','TRh','BLh'):
                         self.val[f'trim{n}_{k}'].set(getattr(d,k))
-                trimed_image = trim_image(self.check_image,d,autocorrect=False)
+                trimed_image = trim_image(self.check_image,d)
                 wid, hei = d.TLw, d.TLh
                 self.trim_mod_x, self.trim_mod_y = wid, hei
                 name = f'trimming{n}'
@@ -580,7 +577,7 @@ class App(tk.Frame):
         self.show_check_img()
         for n in range(MAX_TAB_NUM):
             # 使用しないなら表示しない
-            if not self.val[f'use_frame{n}'].get():
+            if self.val[f'type{n}'].get() == NO_USE:
                 continue
             d = self.get_trimarea(n)
             x = [d['TLw'],d['TRw'],d['BRw'],d['BLw'],d['TLw']]
@@ -597,7 +594,7 @@ class App(tk.Frame):
         im = self.get_check_img()
         d = Corners(**self.get_trimarea())
         
-        trimed_img = trim_image(im,d,autocorrect=False)
+        trimed_img = trim_image(im,d)
         th = calculate_thresh_auto(trimed_img)
         segs, coordinates = search_segments(th)
         max_height = max([x[1]-x[0] for x in coordinates])
@@ -616,18 +613,20 @@ class App(tk.Frame):
 
     def read_alldata(self):
         savepath = Path(self.val['save_dir'].get()) / Path(self.val['save_fname'].get()+'.csv')
-        n = 0
-        d = Corners(**self.get_trimarea(n))
-#        angle = self.val['rotate'].get()
-
+        angle = self.val['rotate'].get()
         results = []
+        displays_lookup = [n for n in range(MAX_TAB_NUM) if self.val[f'type{n}'].get() != NO_USE]
+        corners = [Corners(**self.get_trimarea(tabnum)) for tabnum in displays_lookup]
+
         mode = self.val['imgtype'].get()
         preprocess_aruco = self.val['aruco0'].get()
         st = dt.now()
         markers = [int(x) for x in self.val['aruco0_marker'].get().split('-')]
         if mode == 'image':
             records = OrderedDict([(x, self.val[f'rec_{x}'].get()) 
-                for x in ('number','created_time','modified_time','filename','value')])
+                for x in ['number','created_time','modified_time','filename']])
+            for n in displays_lookup:
+                records[f'value{n}'] = True
             p = Path(self.val['img_dir'].get())
             os.chdir(str(p.resolve()))
             image_filelist = [t for t in p.glob('*.jpg')] + [t for t in p.glob('*.png')]
@@ -642,22 +641,23 @@ class App(tk.Frame):
                 self.val['progress_txt'].set(f'{i}/{max_num}')
                 self.wid['progress'].update()
                 im = cv2.imread(file.name,cv2.IMREAD_GRAYSCALE)
-                if preprocess_aruco:
-                    im = trim_aruco_markers(im, markers)
-                valueread, segments, coordinates = get_digit(im,d,autocorrect=False)
                 temp = {
                     'number':i,
-                    'txt':valueread,
                     'created_time':str(dt.fromtimestamp(file.stat().st_ctime)), # unix timestamp --> datetime
                     'modified_time':str(dt.fromtimestamp(file.stat().st_mtime)),
                     'filename':file.name,
-                    'segments': segments,
-                    'coordinates': coordinates,
                     }
+                if preprocess_aruco:
+                    im = trim_aruco_markers(im, markers)
+                for tabnum in displays_lookup:
+                    valueread, _, _ = get_digit(im,corners[tabnum])
+                    temp[f'txt{tabnum}'] = valueread
                 results.append(temp)
         else:
             records = OrderedDict([(x, self.val[f'rec_{x}'].get()) 
-                for x in ('number','videotime','value','file_time')])
+                for x in ['number','videotime','file_time',]])
+            for n in displays_lookup:
+                records[f'value{n}'] = True
             if len(self.video_captures) == 0:
                 print('no video files loaded.')
                 return
@@ -678,32 +678,36 @@ class App(tk.Frame):
                 im = get_videoimg(self.video_captures, t)
                 if preprocess_aruco:
                     im = trim_aruco_markers(im, markers)
-                valueread, segments, coordinates = get_digit(im,d,autocorrect=False)
                 vt = round(t/tp) if tp == 60 else t
                 vt_filetime = get_videotime(self.video_captures, self.video_filelist, t)
                 temp = {
                     'number':i,
-                    'txt':valueread,
                     'videotime':vt,
                     'file_time': vt_filetime,
-                    'segments': segments,
-                    'coordinates': coordinates,
                     }
+                for tabnum in displays_lookup:
+                    valueread, _, _ = get_digit(im,corners[tabnum])
+                    temp[f'txt{tabnum}'] = valueread
                 results.append(temp)
-        # max & min の参照
-        check_min = self.val[f'min{n}'].get()
-        check_max = self.val[f'max{n}'].get()
-        min_num = self.val[f'min_num{n}'].get()
-        max_num = self.val[f'max_num{n}'].get()
-        for x in results:
-            try:
-                x['value'] = float(x['txt'])
-            except:
-                x['value'] = math.nan
-            if check_min and x['value'] < min_num: # nan と数値の比較は必ず False になる
-                x['value'] = math.nan
-            if check_max and x['value'] > max_num:
-                x['value'] = math.nan
+        for num in displays_lookup:
+            valuetype = self.val[f'type{num}'].get()
+            # max & min の参照
+            check_min = self.val[f'min{num}'].get()
+            check_max = self.val[f'max{num}'].get()
+            min_num = self.val[f'min_num{num}'].get()
+            max_num = self.val[f'max_num{num}'].get()
+            for x in results:
+                if valuetype == '文字列':
+                    x[f'value{num}'] = x[f'txt{num}']
+                    continue
+                try:
+                    x[f'value{num}'] = float(x[f'txt{num}'])
+                except:
+                    x[f'value{num}'] = math.nan
+                if check_min and x[f'value{num}'] < min_num: # nan と数値の比較は必ず False になる
+                    x[f'value{num}'] = math.nan
+                if check_max and x[f'value{num}'] > max_num:
+                    x[f'value{num}'] = math.nan
         # csv 書き込み
         header = [x for x,use in records.items() if use]
         results_use = [{k:v for k,v in res.items() if k in header} for res in results]
@@ -712,19 +716,11 @@ class App(tk.Frame):
             writer.writeheader()
             writer.writerows(results_use)
         self.plt_result_x = [x['number'] for x in results]
-        self.plt_result_y = [x['value'] for x in results]
-
-        min_num = self.val[f'min_num{n}'].get()
-        max_num = self.val[f'max_num{n}'].get()
+        self.plt_result_y = [x[f'value{0}'] for x in results]# for n in displays_lookup]
 
         self.val['progress_txt'].set('complete.')
         en = dt.now()
         print((en.timestamp()-st.timestamp()))
-        """
-        ### テスト中：まだエラーが出る
-        good_results_list = [(x['txt'],x['segments'],x['coordinates']) for x in results if not math.isnan(x['value'])]
-        get_better_coordinates(good_results_list)
-        """
 
     def plotgraph(self):
         if len(self.plt_result_x) == len(self.plt_result_y) > 0:
