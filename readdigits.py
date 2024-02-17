@@ -455,32 +455,27 @@ def find_lines(original_img, corners):
     # 直線検出
     im = trim_image(original_img, corners)
     im = calculate_thresh_auto(im)
+    # 上下の黒い背景を削除
+    bg = __cut_zeros(im)
+    im = im[bg[0]:bg[1]]
     im = cv2.Canny(im, threshold1=10,threshold2=10,apertureSize=3)
-    sizemin = min(im.shape)
+    tatesize = im.shape[0]
+    deg = 0
     params = {
         'rho': 1, # default
         'theta': np.pi/360, # default
-        'threshold': max((sizemin//50, 2)), # 線として検出する点数
-        'minLineLength': max((sizemin//6, 5)), # 線として検出する最小長さ
-        'maxLineGap': max((sizemin//30, 1)), # 同一の線とみなす点の間隔
+        'threshold': max((tatesize//50, 2)), # 線として検出する点数
+        'maxLineGap': max((tatesize//30, 1)), # 同一の線とみなす点の間隔
         }
-    lines = cv2.HoughLinesP(im,**params)
-    if lines is not None and len(lines) > 0:
-        angles = [90 - math.atan2((L[0][3]-L[0][1]),(L[0][2]-L[0][0]))*(180/math.pi) for L in lines]
-        angles_vertical = [a for a in angles if abs(a) < 15]
-        if len(angles_vertical) > 0:
-            deg = round(np.average(angles_vertical))
-        else:
-            deg = 0
-    if deg == 0:
-        # 2回目
-        params['minLineLength'] = sizemin//10
+    for minlinedev in (4, 6, 8):
+        params['minLineLength'] = tatesize//minlinedev # 線として検出する最小長さ
         lines = cv2.HoughLinesP(im,**params)
         if lines is not None and len(lines) > 0:
             angles = [90 - math.atan2((L[0][3]-L[0][1]),(L[0][2]-L[0][0]))*(180/math.pi) for L in lines]
             angles_vertical = [a for a in angles if abs(a) < 15]
             if len(angles_vertical) > 0:
                 deg = round(np.average(angles_vertical))
+                break
     return deg
 
 def find_good_angle(original_img,corners):
