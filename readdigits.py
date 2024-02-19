@@ -115,7 +115,7 @@ class Corners(NamedTuple):
         h = getattr(self,f'{fieldname}h')
         return np.array((w,h))
 
-    def _get_size(self, fullsizeh=None,fullsizew=None):
+    def _get_size(self):
         TR = self._array('TR')
         TL = self._array('TL')
         BL = self._array('BL')
@@ -166,6 +166,18 @@ class Corners(NamedTuple):
         print(c)
         return c
 
+    def _trim_image(self, img):
+        trans_mat, trans_size = self._calc_transform_matrix()
+        img_trimed = transform(img,trans_mat, trans_size)
+        return img_trimed
+
+    @classmethod
+    def _mod(cls,corners,key,mod):
+        w, h = corners._get_size()
+        modw = round(mod/100*w)
+        d = corners._asdict()
+        d[key] += modw
+        return cls(**d)
 
 class Display:
     """4点で囲まれた範囲の切り抜き
@@ -292,7 +304,7 @@ def __calc_transform_mat(corners):
     trans_size = (wid,hei)
     return trans_mat, trans_size
 
-def __transform(img, trans_mat,trans_size):
+def transform(img, trans_mat,trans_size):
     """指定した変換行列を使ってトリミング"""
     if isinstance(trans_mat, list):
         return img
@@ -302,13 +314,13 @@ def __transform(img, trans_mat,trans_size):
 def trim_aruco_markers(img, aruco_ids):
     """画像のarucoマーカーを使ってトリミング"""
     corners = Corners._from_aruco_markers(img, aruco_ids)
-    trans_mat, trans_size = __calc_transform_mat(corners)
-    img_trimed = __transform(img,trans_mat, trans_size)
+    trans_mat, trans_size = corners._calc_transform_matrix()
+    img_trimed = transform(img,trans_mat, trans_size)
     return img_trimed
 
 def trim_image(img,corners):
-    trans_mat, trans_size = __calc_transform_mat(corners)
-    img_trimed = __transform(img,trans_mat, trans_size)
+    trans_mat, trans_size = corners._calc_transform_matrix()
+    img_trimed = transform(img,trans_mat, trans_size)
     return img_trimed
 
 def search_segments(img):
@@ -449,10 +461,9 @@ def find_separated_angles(original_img, corners):
     zero_angles = [r for r,x in zip(angle_range, zero_num_list) if x == max(zero_num_list)]
     return round(np.average(zero_angles))
 
-def find_lines(original_img, corners):
+def find_lines(image):
     # 直線検出
-    im = trim_image(original_img, corners)
-    im = calculate_thresh_auto(im)
+    im = calculate_thresh_auto(image)
     # 上下の黒い背景を削除
     bg = __cut_zeros(im)
     im = im[bg[0]:bg[1]]
@@ -474,14 +485,44 @@ def find_lines(original_img, corners):
             if len(angles_vertical) > 0:
                 deg = round(np.average(angles_vertical))
                 break
-    return deg
+    return deg, lines
 
-def find_good_angle(original_img,corners):
+def find_dots(image, corners):
+    txt, segs, coo = get_digit(image, corners)
+    try:
+        num = float(txt)
+        if '.' in txt:
+            return corners
+    except:
+        pass
+    check = [i for i in range(4,9,4)]
+    check += [i for i in range(-4,-9,-4)]
+    res_num = None
+    res_dot = None
+    for i in check:
+        for key in ('TRw', 'BLw'):
+            c2 = Corners._mod(corners,key,i)
+            txt, segs, coo = get_digit(image, c2)
+            try:
+                num = float(txt)
+            except:
+                continue
+            if '.' in txt:
+                res_dot = c2
+    if res_dot is not None:
+        return res_dot
+    return corners
+
+def find_good_angle(original_img,corners,type='number'):
     angle_bg = find_separated_angles(original_img, corners)
     corners_bg = Corners._correct_angles(corners,angle_bg)
-    angle_lines = find_lines(original_img, corners_bg)
+    angle_lines, _ = find_lines(corners_bg._trim_image(original_img))
     corners_both = Corners._correct_angles(corners,angle_bg - angle_lines)
-    return corners_both
+    corners_res = corners_both
+    # 読み取りテスト
+    if type == 'number':
+        corners_res = find_dots(original_img, corners_both)
+    return corners_res
 
 
 def testprint(x,y):

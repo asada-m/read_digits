@@ -657,7 +657,7 @@ class App(tk.Frame):
                 results.append(temp)
         else:
             records = OrderedDict([(x, self.val[f'rec_{x}'].get()) 
-                for x in ['number','videotime','file_time',]])
+                for x in ['number','videotime','videofiletime',]])
             for n in displays_lookup:
                 records[f'value{n}'] = True
             if len(self.video_captures) == 0:
@@ -685,7 +685,7 @@ class App(tk.Frame):
                 temp = {
                     'number':i,
                     'videotime':vt,
-                    'file_time': vt_filetime,
+                    'videofiletime': vt_filetime,
                     }
                 for tabnum in displays_lookup:
                     c = displays[tabnum].get_corners_from_ratio(im)
