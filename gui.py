@@ -548,7 +548,7 @@ class App(tk.Frame):
         current_tab = self.get_current_trimtab()
         for n in range(MAX_TAB_NUM):
             d = Corners(**self.get_trimarea(n))
-            print(f'button_pressed.  {n}')
+#            print(f'button_pressed.  {n}')
             if self.val[f'type{n}'].get() == NO_USE:
                 continue
             # 座標を自動計算
@@ -559,14 +559,26 @@ class App(tk.Frame):
                 for k in ('TRw','BLw','TRh','BLh'):
                     self.val[f'trim{n}_{k}'].set(getattr(d,k))
 
-                trimed_image = trim_image(self.check_image,d)
+                trimed_image = calculate_thresh_auto(trim_image(self.check_image,d))
+                # テスト
+                txt, _, coordinates = get_digit(self.check_image,d)
                 wid, hei = d.TLw, d.TLh
                 self.trim_mod_x, self.trim_mod_y = wid, hei
                 name = f'trimming{n}'
+                self.clear_graph(name)
+                self.ax[name].grid(False)
                 self.ax[name].imshow(trimed_image,cmap='gray')
                 self.ax[name].xaxis.set_major_formatter(mpl.ticker.FuncFormatter(lambda x, pos: int(x+wid)))
                 self.ax[name].yaxis.set_major_formatter(mpl.ticker.FuncFormatter(lambda x, pos: int(x+hei)))
+                ## show lines
+                if coordinates is not None:
+                    for sxy in coordinates: # (x,x,y,y)
+                        y = [sxy[0],sxy[0],sxy[1],sxy[1],sxy[0]]
+                        x = [sxy[2],sxy[3],sxy[3],sxy[2],sxy[2]]
+                        self.ax[name].plot(x,y,color='orange',lw=max(min(trimed_image.shape)//100, 1))
                 self.canvas[name].draw()
+                ### テキスト更新
+                self.val[f'result{n}'].set(txt)
         self.update_check_img()
     
     def update_check_img(self):
