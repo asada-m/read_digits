@@ -9,8 +9,8 @@ from matplotlib.backend_bases import MouseButton
 from matplotlib.figure import Figure
 
 APP_TITLE = "画像からデジタル数字を読むプログラム"
-APP_VER = "0.61"
-APP_DATE = "2024/02/15"
+APP_VER = "0.62"
+APP_DATE = "2024/02/19"
 
 # ======================================================================
 # GUI
