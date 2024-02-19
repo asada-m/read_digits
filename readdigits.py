@@ -294,6 +294,20 @@ def __cut_zeros(x_array):
             break
     return start_, end_, #x_array[start_:end_]
 
+def __cut_zeros_line(x_array):
+    # 画像上下のゼロ（黒）部分を削除(1次元)
+    in_list = x_array
+    start_, end_ = 0, 0
+    for i, x in enumerate(in_list):
+        if x > 0:
+            start_ = i
+            break
+    for i, x in enumerate(reversed(in_list)):
+        if x > 0:
+            end_ = len(in_list) - i
+            break
+    return start_, end_, #x_array[start_:end_]
+
 def __calc_transform_mat(corners):
     """トリミング用の座標変換行列を作成"""
     tr = [corners._array(x) for x in ('TL','TR','BR','BL')]
@@ -337,7 +351,7 @@ def search_segments(img):
     segments = [img_arr[x[0]:x[1],y[0]:y[1]] for x,y in zip(segsx,segsy)]
     coordinates = [(x[0],x[1],y[0],y[1]) for x,y in zip(segsx, segsy)]
     # あまりに小さい領域は削除
-    min_size = max([x.shape[1] for x in segments]) / 8
+    min_size = max([min(x.shape) for x in segments]) / 10
     newseg, newcoo = [], []
     for i,s in enumerate(segments):
         if s.shape[0] > min_size and s.shape[1] > min_size:
@@ -404,8 +418,11 @@ def get_digit(im, corners):
     if im is None:
         return "", []
     trimed_img = trim_image(im,corners)
+    """
     th = calculate_thresh_auto(trimed_img)
     segs, coordinates = search_segments(th)
+    """
+    segs, coordinates = find_dotted_coordinates(trimed_img)
     max_height = max([x[1]-x[0] for x in coordinates])
     result = [read_segment(i,max_height) for i in segs]
     res = "".join([x[0] for x in result])
@@ -495,12 +512,12 @@ def find_dots(image, corners):
             return corners
     except:
         pass
-    check = [i for i in range(4,9,4)]
-    check += [i for i in range(-4,-9,-4)]
+    check = [i for i in range(3,9,3)]
+    check += [i for i in range(-3,-9,-3)]
     res_num = None
     res_dot = None
     for i in check:
-        for key in ('TRw', 'BLw'):
+        for key in ('TRw',): # 'BLw'):
             c2 = Corners._mod(corners,key,i)
             txt, segs, coo = get_digit(image, c2)
             try:
@@ -519,10 +536,45 @@ def find_good_angle(original_img,corners,type='number'):
     angle_lines, _ = find_lines(corners_bg._trim_image(original_img))
     corners_both = Corners._correct_angles(corners,angle_bg - angle_lines)
     corners_res = corners_both
-    # 読み取りテスト
     if type == 'number':
         corners_res = find_dots(original_img, corners_both)
     return corners_res
+
+def find_dotted_coordinates(trimed_img):
+    # 数字にくっついている小数点を分割する
+    th = calculate_thresh_auto(trimed_img)
+    char_imgs, coordinates = search_segments(th)
+    max_height = max([x[1]-x[0] for x in coordinates])
+    char_imgs_, coordinates_ = [], []
+    for char_img, coordinate in zip(char_imgs,coordinates):
+        ch, switch = read_segment(char_img, max_height)
+        if ch.isdigit(): # 右側のセグメントがONのとき(数字は全部そう)
+            not_dots = [(len(img)-__cut_zeros_line(img)[0]) > len(img)/5 for img in char_img.T]
+            if all(not_dots): # not all の書き方がわからなかった
+                char_imgs_.append(char_img)
+                coordinates_.append(coordinate)
+                continue
+            # 後ろ側からdotぽい(False)が続くとき
+            dotlen = 0
+            for i,p in enumerate(reversed(not_dots)):
+                if p is True:
+                    dotlen = i
+                    break
+            if len(char_img[0])/10 < dotlen < len(char_img[0])/3: # 横の長さに対して一定割合のとき
+                # 分割
+                c = coordinate
+                cnum = (c[0],c[1],c[2],c[3]-dotlen)
+                char_imgs_.append(th[cnum[0]:cnum[1],cnum[2]:cnum[3]])
+                coordinates_.append(cnum)
+                temp = th[:,c[3]-dotlen:c[3]]
+                st,en = __cut_zeros(temp)
+                cdot = (st,en,c[3]-dotlen,c[3])
+                char_imgs_.append(th[cdot[0]:cdot[1],cdot[2]:cdot[3]])
+                coordinates_.append(cdot)
+                continue
+        char_imgs_.append(char_img)
+        coordinates_.append(coordinate)
+    return char_imgs_, coordinates_
 
 
 def testprint(x,y):

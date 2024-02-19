@@ -76,7 +76,7 @@ class App(tk.Frame):
         self.val['rec_value'].set(1)
         self.val['rec_videotime'].set(1)
         self.val['rec_videofiletime'].set(1)
-        self.val['video_spacing'].set(5)
+        self.val['video_spacing'].set(10)
 
         self.val['imgtype'].trace_add('write',self.switch_imgtype)
         self.val['video_spacing'].trace_add('write',self.set_video_range)
