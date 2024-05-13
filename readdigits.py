@@ -1,16 +1,13 @@
-import csv
-import math
-import statistics
-from datetime import datetime as dt
+# region Define
 from pathlib import Path
-from collections import OrderedDict
+import math
+from datetime import datetime as dt
 from typing import NamedTuple
 import numpy as np
 import cv2
 from cv2 import aruco
-import matplotlib.pyplot as plt
 
-version = __version__ = "0.62"
+version = __version__ = "0.63"
 
 # ======================================================================
 # 定数
@@ -61,27 +58,31 @@ Order of 7 segments:
 ARUCO_DICT = aruco.getPredefinedDictionary(aruco.DICT_4X4_50) # 4X4のマーカーを50個
 
 # ======================================================================
-
+# region Class Corners
 class Corners(NamedTuple):
-    TLw: float
-    TLh: float
-    TRw: float
-    TRh: float
-    BLw: float
-    BLh: float
-    BRw: float
-    BRh: float
+    """切り抜き用の座標
+    np.array 形式を呼び出すときは インスタンス._array(角の名前/whなし)
+    """
+    TLw: float  # Top-Left width
+    TLh: float  # Top-Left height
+    TRw: float  # Top-Right width
+    TRh: float  # Top-Right height
+    BLw: float  # Bottom-Left width
+    BLh: float  # Bottom-Left height
+    BRw: float  # Bottom-Right width
+    BRh: float  # Bottom-Right height
 
     @classmethod
     def _from_2corners(cls, TLw, TLh, BRw, BRh):
-        """左上・右下の座標のみ使う
+        """左上・右下の座標のみ指定して四隅座標を取得
         """
         return cls(TLw,TLh,BRw,TLh,TLw,BRh,BRw,BRh)
 
     @classmethod
-    def _from_aruco_markers(cls, img, aruco_ids):
+    def _from_aruco_markers(cls, img:np.array, aruco_ids:list):
         """画像のarucoマーカーを検出してトリミングする座標を決定する
         aruco_ids: [左上、右上、右下、左下]
+        
         ※各マーカーの内側の角から、さらに内側にシフトした位置をトリミング座標にする
         ※マーカーの周囲に白い枠が必要だが、白い枠は検出対象外＆数字検出時に不都合が生じるので削っている
         """
@@ -110,7 +111,7 @@ class Corners(NamedTuple):
         else:
             return 'abs'
 
-    def _array(self, fieldname):
+    def _array(self, fieldname:str):
         w = getattr(self,f'{fieldname}w')
         h = getattr(self,f'{fieldname}h')
         return np.array((w,h))
@@ -124,9 +125,12 @@ class Corners(NamedTuple):
         return (wid, hei)
 
     @classmethod
-    def _correct_angles(cls,corners, angle=0):
+    def _correct_angles(cls,corners, angle:int=0):
         """平行四辺形補正：左上と右下の座標と傾き角度から右上と左下座標を補正する
-        右上と左下が空欄でも入力済みでも無視"""
+        右上と左下が空欄でも入力済みでも無視
+        
+        一度 Corners を作成してから補正して再作成する
+        """
         c = corners
         if angle == 0:
             return Corners(c.TLw,c.TLh,c.BRw,c.TLh,c.TLw,c.BRh,c.BRw,c.BRh)
@@ -166,7 +170,7 @@ class Corners(NamedTuple):
         print(c)
         return c
 
-    def _trim_image(self, img):
+    def trim_image(self, img):
         trans_mat, trans_size = self._calc_transform_matrix()
         img_trimed = transform(img,trans_mat, trans_size)
         return img_trimed
@@ -179,10 +183,12 @@ class Corners(NamedTuple):
         d[key] += modw
         return cls(**d)
 
+
+# region Class Display
 class Display:
     """4点で囲まれた範囲の切り抜き
     """
-    def __init__(self,corners=None,aruco_ids=[],corners_ratio=None):
+    def __init__(self,corners:Corners=None,aruco_ids=[],corners_ratio=None):
         self.corners = corners
         self.corners_ratio = corners_ratio
         self.aruco_ids = aruco_ids
@@ -195,7 +201,7 @@ class Display:
             self.corners._calc_transform_matrix()
             return cv2.warpPerspective(original_image, self.trans_matrix, self.get_image_size(), flags=cv2.INTER_CUBIC)
         elif self.corners is not None:
-            return trim_image(original_image, self.corners)
+            return self.corners.trim_image(original_image)
         else:
             raise ValueError
 
@@ -227,6 +233,7 @@ class Display:
         c = {f: getattr(corners,f)/size[f[-1]] for f in names}
         self.corners_ratio = Corners(**c)
 
+# region Utils for Images
 # ======================================================================
 # 画像処理汎用
 # ======================================================================
@@ -242,11 +249,6 @@ def rotate_image(img,angle:int=0):
         return img
     rotated_img = cv2.rotate(img,rrr)
     return rotated_img
-
-def testimshow(im):
-    f,a = plt.subplots()
-    a.imshow(im,cmap='gray')
-    plt.show()
 
 def calculate_thresh_auto(img,morpho=True,white=255):
     arr = img
@@ -280,9 +282,12 @@ def __nonzerolist(in_list):
                 a.append((start_, end_))
     return a
 
-def __cut_zeros(x_array):
-    # 画像上下のゼロ（黒）部分を削除
-    in_list = np.sum(x_array, axis=1)
+def __cut_zeros(x_array, dim=2):
+    if dim == 2:
+        # 画像上下のゼロ（黒）部分を削除
+        in_list = np.sum(x_array, axis=1)
+    elif dim == 1:
+        in_list = x_array
     start_, end_ = 0, 0
     for i, x in enumerate(in_list):
         if x > 0:
@@ -293,30 +298,6 @@ def __cut_zeros(x_array):
             end_ = len(in_list) - i
             break
     return start_, end_, #x_array[start_:end_]
-
-def __cut_zeros_line(x_array):
-    # 画像上下のゼロ（黒）部分を削除(1次元)
-    in_list = x_array
-    start_, end_ = 0, 0
-    for i, x in enumerate(in_list):
-        if x > 0:
-            start_ = i
-            break
-    for i, x in enumerate(reversed(in_list)):
-        if x > 0:
-            end_ = len(in_list) - i
-            break
-    return start_, end_, #x_array[start_:end_]
-
-def __calc_transform_mat(corners):
-    """トリミング用の座標変換行列を作成"""
-    tr = [corners._array(x) for x in ('TL','TR','BR','BL')]
-    p_original = np.array(tr, dtype=np.float32)
-    wid, hei = corners._get_size() ############## fullsize
-    p_trans = np.array([[0,0],[wid,0],[wid,hei],[0,hei]], dtype=np.float32)
-    trans_mat = cv2.getPerspectiveTransform(p_original,p_trans)
-    trans_size = (wid,hei)
-    return trans_mat, trans_size
 
 def transform(img, trans_mat,trans_size):
     """指定した変換行列を使ってトリミング"""
@@ -332,11 +313,6 @@ def trim_aruco_markers(img, aruco_ids):
     img_trimed = transform(img,trans_mat, trans_size)
     return img_trimed
 
-def trim_image(img,corners):
-    trans_mat, trans_size = corners._calc_transform_matrix()
-    img_trimed = transform(img,trans_mat, trans_size)
-    return img_trimed
-
 def search_segments(img):
 #    size = img.shape # imgがNoneでないとき
     img_arr = img
@@ -346,7 +322,7 @@ def search_segments(img):
     segsy = __nonzerolist(tate_wa)
     if len(segsy) == 0:
         return [], []
-    segs_tmp = [img_arr[:,x:y] for x,y in segsy]
+    #segs_tmp = [img_arr[:,x:y] for x,y in segsy]
     segsx = [__cut_zeros(img_arr[:,x[0]:x[1]]) for x in segsy]
     segments = [img_arr[x[0]:x[1],y[0]:y[1]] for x,y in zip(segsx,segsy)]
     coordinates = [(x[0],x[1],y[0],y[1]) for x,y in zip(segsx, segsy)]
@@ -414,10 +390,10 @@ def read_segment(img,max_height):
             return "*", t
     else: return "", None
 
-def get_digit(im, corners):
+def get_digit(im, corners:Corners):
     if im is None:
         return "", []
-    trimed_img = trim_image(im,corners)
+    trimed_img = corners.trim_image(im)
     """
     th = calculate_thresh_auto(trimed_img)
     segs, coordinates = search_segments(th)
@@ -427,59 +403,29 @@ def get_digit(im, corners):
     result = [read_segment(i,max_height) for i in segs]
     res = "".join([x[0] for x in result])
     segments = [x[1] for x in result]
+#    segs, coordinates = assemble_bars(res, segments, coordinates)
     return res, segments, coordinates
 
-def get_better_coordinates(good_results_list):
-    # (str, segments, [(x,x,y,y),,,]) のリスト 
-    print(good_results_list[0])
-    max_strlen = max([len(str(x[0])) for x in good_results_list])
-    # 数値はたいてい右寄せの数字になっているので、右端から処理する
-    for i in range(1,max_strlen+1):
-        temp = {".":[],"updown":[],"rightleft":[]}
-        for res, segments, coordinates in good_results_list:
-            if len(res) < max_strlen: continue
-            r = res[-i]
-            s = segments[-i]
-            if s is None:
-                if r == ".":
-                    temp["."].append(coordinates[-i])
-                else:
-                    continue
-            else:
-                if s[0] and s[6]: # 上下があるセグメント
-                    temp["updown"].append(coordinates[-i])
-                if (s[2] or s[5]) and (s[1] or s[4]): # 左右があるセグメント
-                    temp["rightleft"].append(coordinates[-i])
-        # 平均と中央値をとる
-        x_medians, y_medians, d_medians = None, None, None
-        if len(temp["updown"]) > 0:
-            y_medians = [[statistics.median_high(xy[i]) for xy in temp["updown"] if len(xy) == 4] for i in (2,3)]
-        if len(temp["rightleft"]) > 0:
-            x_medians = [[statistics.median_high(xy[i]) for xy in temp["rightleft"] if len(xy) == 4] for i in (0,1)]
-        if len(temp["."]) > 0:
-            d_medians = [[statistics.median_high(xy[i]) for xy in temp["."] if len(xy) == 4] for i in ramge(4)]
-        print(f"{x_medians = }   {y_medians = }   {d_medians}")
-
-
+# region Fine-tuning
 def find_separated_angles(original_img, corners):
-    # 文字が縦に揃うとき、縦の和がゼロになる列数が最も多いと思われる
-    count, rr = 0,0
+    """デジタル数字の傾きがまっすぐになるように補正する
+    文字が縦に揃うとき、縦の和がゼロになる列数が最も多いと思われる"""
     zero_num_list = []
     angle_range = range(-11,21)
-    for i,r in enumerate(angle_range):
+    for r in angle_range:
         dd = Corners._correct_angles(corners,r)
-        im_trim = trim_image(original_img, dd)
+        im_trim = dd.trim_image(original_img)
         th = calculate_thresh_auto(im_trim)
         tate_wa = np.sum(th,axis=0)
-        yoko_wa = np.sum(th,axis=1)
+        #yoko_wa = np.sum(th,axis=1)
         zeros_t = len(tate_wa)-np.count_nonzero(tate_wa)
-        zeros_y = len(yoko_wa)-np.count_nonzero(yoko_wa)
+        #zeros_y = len(yoko_wa)-np.count_nonzero(yoko_wa)
         zero_num_list.append(zeros_t)
     zero_angles = [r for r,x in zip(angle_range, zero_num_list) if x == max(zero_num_list)]
     return round(np.average(zero_angles))
 
 def find_lines(image):
-    # 直線検出
+    """直線検出"""
     im = calculate_thresh_auto(image)
     # 上下の黒い背景を削除
     bg = __cut_zeros(im)
@@ -487,15 +433,15 @@ def find_lines(image):
     im = cv2.Canny(im, threshold1=10,threshold2=10,apertureSize=3)
     tatesize = im.shape[0]
     deg = 0
-    params = {
+    HoughLine_params = {
         'rho': 1, # default
         'theta': np.pi/360, # default
         'threshold': max((tatesize//50, 2)), # 線として検出する点数
         'maxLineGap': max((tatesize//30, 1)), # 同一の線とみなす点の間隔
         }
     for minlinedev in (4, 6, 8):
-        params['minLineLength'] = tatesize//minlinedev # 線として検出する最小長さ
-        lines = cv2.HoughLinesP(im,**params)
+        HoughLine_params['minLineLength'] = tatesize//minlinedev # 線として検出する最小長さ
+        lines = cv2.HoughLinesP(im,**HoughLine_params)
         if lines is not None and len(lines) > 0:
             angles = [90 - math.atan2((L[0][3]-L[0][1]),(L[0][2]-L[0][0]))*(180/math.pi) for L in lines]
             angles_vertical = [a for a in angles if abs(a) < 15]
@@ -504,10 +450,12 @@ def find_lines(image):
                 break
     return deg, lines
 
-def find_dots(image, corners):
-    txt, segs, coo = get_digit(image, corners)
+def finetuning_dots(image, corners):
+    """小数点を検出できるように四隅右上の座標を微調整する"""
+    txt, _, _ = get_digit(image, corners)
     try:
-        num = float(txt)
+        _ = float(txt)
+        # 数値判定できて小数点が存在する場合は調整なし
         if '.' in txt:
             return corners
     except:
@@ -519,9 +467,9 @@ def find_dots(image, corners):
     for i in check:
         for key in ('TRw',): # 'BLw'):
             c2 = Corners._mod(corners,key,i)
-            txt, segs, coo = get_digit(image, c2)
+            txt, _, _ = get_digit(image, c2)
             try:
-                num = float(txt)
+                _ = float(txt)
             except:
                 continue
             if '.' in txt:
@@ -533,15 +481,15 @@ def find_dots(image, corners):
 def find_good_angle(original_img,corners,type='number'):
     angle_bg = find_separated_angles(original_img, corners)
     corners_bg = Corners._correct_angles(corners,angle_bg)
-    angle_lines, _ = find_lines(corners_bg._trim_image(original_img))
+    angle_lines, _ = find_lines(corners_bg.trim_image(original_img))
     corners_both = Corners._correct_angles(corners,angle_bg - angle_lines)
     corners_res = corners_both
     if type == 'number':
-        corners_res = find_dots(original_img, corners_both)
+        corners_res = finetuning_dots(original_img, corners_both)
     return corners_res
 
 def find_dotted_coordinates(trimed_img):
-    # 数字にくっついている小数点を分割する
+    """数字にくっついている小数点を分割する"""
     th = calculate_thresh_auto(trimed_img)
     char_imgs, coordinates = search_segments(th)
     max_height = max([x[1]-x[0] for x in coordinates])
@@ -549,12 +497,13 @@ def find_dotted_coordinates(trimed_img):
     for char_img, coordinate in zip(char_imgs,coordinates):
         ch, switch = read_segment(char_img, max_height)
         if ch.isdigit(): # 右側のセグメントがONのとき(数字は全部そう)
-            not_dots = [(len(img)-__cut_zeros_line(img)[0]) > len(img)/5 for img in char_img.T]
+            not_dots = [(len(img)-__cut_zeros(img,dim=1)[0]) > len(img)/5 for img in char_img.T]
             if all(not_dots): # not all の書き方がわからなかった
                 char_imgs_.append(char_img)
                 coordinates_.append(coordinate)
                 continue
             # 後ろ側からdotぽい(False)が続くとき
+            # 下から少し浮いた小数点の場合もある
             dotlen = 0
             for i,p in enumerate(reversed(not_dots)):
                 if p is True:
@@ -576,37 +525,72 @@ def find_dotted_coordinates(trimed_img):
         coordinates_.append(coordinate)
     return char_imgs_, coordinates_
 
+def assemble_bars(res, segments, coordinates):
+    """数字の縦棒の間隔が広く、傾き補正時に別々の領域に分離してしまう場合、本体の横棒とくっつける
+    分離した棒は'' または 1 になっているはず
+    """
+    # 未完成
+    def compare_segment(tuplea,tupleb):
+        """数字判定されたAの各セグメントがBと一致するかどうか"""
+        if not isinstance(tuplea,tuple):
+            return False
+        c = [a==b if b in (1,0) else True for a, b in zip(tuplea,tupleb)]
+        return all(c)
 
-def testprint(x,y):
-    fig,ax = plt.subplots()
-    ax.tick_params(top=False,bottom=True,labeltop=False,labelbottom=True)
-    ax.set(xlabel='number')
-    ax.plot(x,y,marker='.')
-    plt.show()
-    del fig
-    del ax
+    if (r not in res for r in ('','1')):
+        return res, segments, coordinates############################################################3
 
+    pops = []
+    for i, r in enumerate(res):
+        if compare_segment(segments[i],(None,0,None,None,0,None,None,)):
+            # 左の棒がないとき
+            if i > 0 and res[i-1] in ('', '1'):
+                wid_self = coordinates[i][1]-coordinates[i][0]
+                wid_bar = coordinates[i-1][1]-coordinates[i-1][0]
+                gap = coordinates[i][0]-coordinates[i-1][1]
+                if gap < wid_bar and wid_bar *2 < wid_self:
+                    # barが十分細くて隙間が狭いときくっつける
+                    pops.append((i,-1))
 
+            # 右の棒がないとき
+            if i < len(res)-1 and res[i+1] in ('', '1'):
+                wid_self = coordinates[i][1]-coordinates[i][0]
+                wid_bar = coordinates[i+1][1]-coordinates[i+1][0]
+                gap = coordinates[i+1][0]-coordinates[i][1]
+                if gap < wid_bar and wid_bar *2 < wid_self:
+                    # barが十分細くて隙間が狭いときくっつける
+                    pops.append((i,+1))
+
+    for p in pops:
+        pass
+
+# region Utils for Movies
 # ======================================================================
 # 動画処理
 # ======================================================================
 def get_videoimg(videolist, sec):
-    # 指定した秒位置の画像を動画から切り出し(複数動画ファイルOK)
+    """ 指定した秒位置の画像を動画から切り出し(複数動画ファイルOK)"""
     s = sec
     img = None
+    ct = 0
     for x in videolist:
         fps = x.get(cv2.CAP_PROP_FPS)
         fr = round(fps * s)
         max_frame = int(x.get(cv2.CAP_PROP_FRAME_COUNT))
+        ms = round(s*1000)
         if fr < max_frame:
             x.set(cv2.CAP_PROP_POS_FRAMES, fr)
+            # x.set(cv2.CAP_PROP_POS_MSEC, ms)
             ret, img = x.read()
             # 特定のフレームが読込みできない場合がある： 1フレームずらす
             # 読めないときは数～数十フレーム続けて読めないことがある
             # ファイル破損することがあるらしい (しかしaviutlでは問題なく開ける  なぜ???)
-            # opencv-python のISSUE でも未解決問題らしい
+            # opencv-python のISSUE でも未解決問題らしい(?)
+            # コーデックの問題でmp4でない場合もある(?)
             if not ret:
-                x.set(cv2.CAP_PROP_POS_FRAMES, fr+1)
+                ct +=1
+                x.set(cv2.CAP_PROP_POS_FRAMES, fr-1)
+            # x.set(cv2.CAP_PROP_POS_MSEC, ms+1)
                 ret, img = x.read()
             break
         else:
@@ -615,8 +599,8 @@ def get_videoimg(videolist, sec):
                 break
     if img is not None:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-#    print(f"video {s=} / {ret=} / {fps=:.2f} / {fr=}")
     return img
+
 
 def get_videotime(videolist, videofilelist, sec):
     """ ファイル作成日時から逆算して動画の撮影時刻を取得 """
@@ -633,5 +617,45 @@ def get_videotime(videolist, videofilelist, sec):
         else:
             s -= max_frame / fps
             continue
+
+# region Others
+
+def print_aruco_markers(savedir,markerIDs:list=[0,1,2,3],base=20):
+    """装置ディスプレイに貼り付け用のarucoマーカー画像を作成してsavedirに4種類出力する
+    markerID[左上,右上,右下,左下]を指定可
+    テプラ等で印刷したあと、黒枠の外側に白い部分が残らないようにハサミで切り抜いてから、装置に貼ってください。
+    savedir: 保存先フォルダ
+    markerIDs: IDセット
+    base: 画像パーツのサイズ（テプラ印刷なら20くらいでOK）
+    """
+    marker_names = [("Top","Left"),("Top","Right"),("Bottom","Right"),("Bottom","Left")]
+    mgn = base//2
+    size_mark = 6*base # 生成するマーカーのサイズ
+    fillL = base*6
+    fillS = mgn
+    max_wid = fillL+fillS+size_mark+mgn*2
+    fface = cv2.FONT_HERSHEY_DUPLEX
+    fscale = base/20
+    ft = round(base/15) if base/20 > 1.4 else 1
+    for m,id in zip(marker_names,markerIDs):
+        img_mark = ARUCO_DICT.generateImageMarker(id, size_mark)
+        txtmgn = base//3 if "Bottom" in m else base//2
+        if "Left" in m:
+            img_ = np.concatenate([np.full((size_mark,fillL+mgn),255),img_mark,np.full((size_mark,fillS+mgn),255)],1)
+            cv2.putText(img_,m[0],(mgn+txtmgn,round(base*1.5)),fface,fscale,0,ft)
+            cv2.putText(img_,m[1],(mgn+txtmgn,round(base*3.5)),fface,fscale,0,ft)
+            cv2.putText(img_,f'ID:{id}',(mgn+txtmgn,round(base*5.5)),fface,fscale,0,ft)
+        else:
+            img_ = np.concatenate([np.full((size_mark,fillS+mgn),255),img_mark,np.full((size_mark,fillL+mgn),255)],1)
+            cv2.putText(img_,m[0],(fillS+mgn+size_mark+txtmgn,round(base*1.5)),fface,fscale,0,ft)
+            cv2.putText(img_,m[1],(fillS+mgn+size_mark+txtmgn,round(base*3.5)),fface,fscale,0,ft)
+            cv2.putText(img_,f'ID:{id}',(fillS+mgn+size_mark+txtmgn,round(base*5.5)),fface,fscale,0,ft)
+        img_ = np.concatenate([np.full((fillS+mgn,max_wid),255),img_,np.full((fillS+mgn,max_wid),255)],0)
+        for n in range(mgn):
+            # 縁は黒で塗りつぶし
+            cv2.rectangle(img_,(n,n),(max_wid-n,size_mark+fillS*2+mgn*2-n),0,thickness=1)
+        fn = (Path(savedir)/Path(f"marker_{m[0]}{m[1]}.jpg")).resolve().as_posix()
+        cv2.imwrite(fn,img_)
+
 
 
