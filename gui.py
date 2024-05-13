@@ -1,15 +1,26 @@
-from readdigits import *
+from collections import OrderedDict
+import csv
+from datetime import datetime as dt
+import math
+import os
+from pathlib import Path
+
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from idlelib.tooltip import Hovertip
+
 import matplotlib as mpl
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backend_bases import MouseButton
 from matplotlib.figure import Figure
+import matplotlib.pyplot as plt
+import cv2
+
+import readdigits as rd
+from readdigits import Corners, Display
 
 APP_TITLE = "画像からデジタル数字を読むプログラム"
-APP_VER = "0.61"
-APP_DATE = "2024/02/15"
+APP_VER = rd.version
 
 # ======================================================================
 # GUI
@@ -45,12 +56,15 @@ def modify_dpi():
         ctypes.windll.shcore.SetProcessDpiAwareness(True)
 modify_dpi()
 
+FRAME_NAMES = Corners._fields
+NO_USE = '(使用しない)'
 
 class App(tk.Frame):
+    # region Initialize
     def __init__(self, master=None):
         super().__init__(master)
         self.master = master
-        self.master.title(f'{APP_TITLE}   ver.{APP_VER}  ({APP_DATE})')
+        self.master.title(f'{APP_TITLE}   ver.{APP_VER}')
         self.fr = {}
         self.val = {}
         self.wid = {}
@@ -73,7 +87,7 @@ class App(tk.Frame):
         self.val['rec_value'].set(1)
         self.val['rec_videotime'].set(1)
         self.val['rec_videofiletime'].set(1)
-        self.val['video_spacing'].set(5)
+        self.val['video_spacing'].set(10)
 
         self.val['imgtype'].trace_add('write',self.switch_imgtype)
         self.val['video_spacing'].trace_add('write',self.set_video_range)
@@ -113,13 +127,14 @@ class App(tk.Frame):
         self.val['progress_txt'].set('')
         self.wid['checkimg'].config(values=[])
         self.wid['checkvideo_sec'].config(values=[])
-        for x in range(3):
+        for x in range(MAX_TAB_NUM):
             self.val[f'result{x}'].set('')
             for v in FRAME_NAMES:
                 self.val[f'trim{x}_{v}'].set(0)
                 self.wid[f'trim{x}_{v}'].config(values=[0,])
         self.clear_graphs()
 
+    # region Layout
     # 見やすくするためレイアウト用のメソッドを分割
     # 別のメソッドから呼び出さない変数はインスタンス変数にせず、数行程度で使い捨てる
     def layout_settings(self):
@@ -188,9 +203,9 @@ class App(tk.Frame):
         tk.Checkbutton(f,text='通し番号',variable=self.val['rec_number']).pack(**pads2,anchor=tk.NW)
         tk.Checkbutton(f,text='読み取った値',state='disabled',variable=self.val['rec_value']).pack(**pads2,anchor=tk.NW)
         ff = self.fr['img_rec'] = ttk.Frame(f)
-        tk.Checkbutton(ff,text='ファイル名',variable=self.val['rec_filename']).pack(**pads2,anchor=tk.NW)
-        tk.Checkbutton(ff,text='ファイル作成日時',variable=self.val['rec_created_time']).pack(**pads2,anchor=tk.NW)
-        tk.Checkbutton(ff,text='ファイル更新日時',variable=self.val['rec_modified_time']).pack(**pads2,anchor=tk.NW)
+        tk.Checkbutton(ff,text='画像ファイル名',variable=self.val['rec_filename']).pack(**pads2,anchor=tk.NW)
+        tk.Checkbutton(ff,text='画像ファイル作成日時',variable=self.val['rec_created_time']).pack(**pads2,anchor=tk.NW)
+        tk.Checkbutton(ff,text='画像ファイル更新日時',variable=self.val['rec_modified_time']).pack(**pads2,anchor=tk.NW)
 #        tk.Checkbutton(ff,text='画像のタイムスタンプ',variable=self.val['rec_timestamp']).pack(**pads2,anchor=tk.NW)
 #        fff = ttk.Frame(ff)
 #        ttk.Label(fff,text='     カメラ機種：').pack(**pads2,anchor=tk.NW,side=tk.LEFT)
@@ -229,7 +244,7 @@ class App(tk.Frame):
         ttk.Label(ff,text='画像の向き (°)').pack(side=tk.LEFT,**pads2)
         c = ttk.Combobox(ff,values=[0,90,180,270],width=4,textvariable=self.val['rotate'],state='readonly')
         c.pack(side=tk.LEFT,**pads2)
-        Hovertip(c,'画像が横向きになっているときは、ここで回転できます。')
+        Hovertip(c,'画像が横向きになっているときは、ここで回転できます。\narucoマーカー使用時は指定不要')
         ff.pack(side=tk.LEFT,padx=12)
         a = ttk.Checkbutton(f,text="arucoマーカー検出 --> IDセット ：",variable=self.val['aruco0'],command=self.update_checkimg)
         a.pack(**pads4,side=tk.LEFT)
@@ -260,28 +275,22 @@ class App(tk.Frame):
             ft = ttk.Frame(self.notebook_trim,relief=tk.GROOVE)
             #self.tabs_trim.append(ft)
             self.notebook_trim.add(ft,text=f' 数字枠{x+1} ')
-            self.val[f'use_frame{x}'] = tk.IntVar(self.master, value=0)
             self.val[f'result{x}'] = tk.StringVar(self.master,value='')
-            self.val[f'trim{x}_auto_correction'] = tk.IntVar(self.master, value=1)
             self.val[f'min{x}'] = tk.IntVar(self.master, value=0)
             self.val[f'max{x}'] = tk.IntVar(self.master, value=0)
             self.val[f'check_witheyes{x}'] = tk.IntVar(self.master, value=0)
-            self.val[f'min{x}'].trace_add('write',self.update_minmax)
-            self.val[f'max{x}'].trace_add('write',self.update_minmax)
+            self.val[f'min{x}'].trace_add('write',lambda *_,n=x: self.update_minmax(n))
+            self.val[f'max{x}'].trace_add('write',lambda *_,n=x: self.update_minmax(n))
             self.val[f'min_num{x}'] = tk.DoubleVar(self.master, value=0)
             self.val[f'max_num{x}'] = tk.DoubleVar(self.master, value=0)
-            self.val[f'type{x}'] = tk.StringVar(self.master,value='数値')
+            self.val[f'type{x}'] = tk.StringVar(self.master,value=NO_USE)
+            self.val[f'type{x}'].trace_add('write',lambda *_,n=x: self.update_autocorrection(n))
 
             f = ttk.Frame(ft)
             ff = ttk.Frame(f)
 #            fff = tk.Frame(ff,background='red')
             fff = tk.Frame(ff)
-            w = ttk.Checkbutton(fff,text='使用する',variable=self.val[f'use_frame{x}'])
-            if x == 0:
-                w.config(state = 'disabled')
-                self.val[f'use_frame{x}'].set(1)
-            w.pack(**pads4,side=tk.LEFT)
-            w = ttk.Combobox(fff,width=10,values=['数値','指数部','ON/OFF'],textvariable=self.val[f'type{x}'],state='readonly')
+            w = ttk.Combobox(fff,width=10,values=[NO_USE,'数値','指数部','文字列'],textvariable=self.val[f'type{x}'],state='readonly')
             w.pack(**pads4,side=tk.LEFT)
             fff.pack()
             name = f'trimming{x}'
@@ -312,10 +321,9 @@ class App(tk.Frame):
                 self.wid[f'trim{x}_{v[0]}h'].grid(row=v[1],column=v[2]+2,**pads2)
             fff.pack(**framepads,**expandx,)
             fff = ttk.Frame(ff)
-            ttk.Checkbutton(fff,text='座標自動補正',variable=self.val[f'trim{x}_auto_correction']).pack(**pads2,side=tk.LEFT)
-            fff.pack(**framepads,**expandx,)
-            b = ttk.Button(fff,text='表示 & 読み取りテスト',style="TButton",command=self.button_show_trimming_img)
-            b.pack(**pads4,side=tk.LEFT)
+            self.wid[f'btn_autocorrect{x}'] = ttk.Button(fff,text='座標自動補正',style="TButton",
+                    state='disabled',command=lambda *_,n=x:self.button_autocorrection(n))
+            self.wid[f'btn_autocorrect{x}'].pack(**pads4,side=tk.LEFT)
             txt =  'トリミング用の座標指定： （横、縦）\n\n 左上と右下は必須\n'
             txt += '数字と小数点のラインが重ならず、グリッドに沿うように範囲を調整してください。\n\n'
             txt += '読み取りテスト で小数点分離に失敗する場合は、\n'
@@ -323,6 +331,7 @@ class App(tk.Frame):
             Hovertip(ff,txt)
             t = tk.Label(fff,textvariable=self.val[f'result{x}'],fg="red",font=('',15))
             t.pack(**pads2,side=tk.LEFT)
+            fff.pack(**framepads,**expandx,)
             ff.pack(**framepads,**expandx)
             ff = ttk.LabelFrame(f,text='値取得方法')
             fv = ttk.Frame(ff)
@@ -336,8 +345,8 @@ class App(tk.Frame):
             fv.pack(**expandx)
             Hovertip(fv,'最大・最小値から外れた値をnanにします。')
             ff.pack(**framepads,**expandx,)
-            
-            self.val[f'trim{x}_auto_correction'].trace_add('write',self.update_trimarea_view)
+            if x == 0:
+                self.val[f'type{x}'].set('数値')
         
         w = ttk.Frame(self.tabs[tb])
         f = ttk.Frame(w)
@@ -359,6 +368,10 @@ class App(tk.Frame):
         Hovertip(b,'読み取り完了後、csv のデータをプロットします。')
         w.pack(**framepads,**expandx)
 
+    def layout_version(self):
+        tb = "バージョン"
+
+    # region GUI Functions
     def switch_imgtype(self,*args):
         self.initialize_allimage()
         if self.val['imgtype'].get() == 'video':
@@ -375,9 +388,6 @@ class App(tk.Frame):
             self.fr['img_browse'].pack(**framepads,**expandx)
             self.fr['img_rec'].pack(side=tk.TOP,anchor=tk.N+tk.W)
             self.wid['checkimg'].pack(**pads2,**expandx)
-
-    def layout_version(self):
-        tb = "バージョン"
 
     def browse_img(self):
         s = filedialog.askdirectory()
@@ -438,8 +448,7 @@ class App(tk.Frame):
         self.load_check_img()
         self.show_check_img()
 
-    def update_minmax(self,*args):
-        n = self.get_current_trimtab()
+    def update_minmax(self,n):
         state = 'normal' if self.val[f'min{n}'].get() else 'disabled'
         self.wid[f'min{n}'].config(state=state)
         state = 'normal' if self.val[f'max{n}'].get() else 'disabled'
@@ -472,7 +481,10 @@ class App(tk.Frame):
             mm = math.ceil(self.max_videosec/60)
         else:
             mm = math.ceil(self.max_videosec)
-        inc = round(self.val['video_spacing'].get())
+        try:
+            inc = round(self.val['video_spacing'].get())
+        except:
+            return
         if inc < 1: inc = 1
         self.wid['checkvideo_sec'].config(from_=0,to=mm,increment=inc)
         self.val['checkvideo_sec'].set(0)
@@ -493,7 +505,7 @@ class App(tk.Frame):
                 sec = self.val['checkvideo_sec'].get()
             else:
                 sec = self.val['checkvideo_sec'].get() * 60
-            check_image = get_videoimg(self.video_captures,sec)
+            check_image = rd.get_videoimg(self.video_captures,sec)
         else:
             fn = self.val['checkimg'].get()
             f = Path(fn)
@@ -504,11 +516,11 @@ class App(tk.Frame):
         if check_image is None:
             return
         angle = self.val['rotate'].get()
-        check_image = rotate_image(check_image,angle)
+        check_image = rd.rotate_image(check_image,angle)
         if self.val['aruco0'].get():
             ids = [int(x) for x in self.val['aruco0_marker'].get().split('-')]
             if len(set(ids)) == 4:
-                check_image = trim_aruco_markers(check_image, ids)
+                check_image = rd.trim_aruco_markers(check_image, ids)
         return check_image
 
     def load_check_img(self):
@@ -531,45 +543,43 @@ class App(tk.Frame):
             self.ax[name].imshow(self.check_image,cmap='gray')
             self.canvas[name].draw()
 
-    def update_trim_area(self,*args):
-        # ひし形補正を考慮して変数に反映する
-        n = self.get_current_trimtab()
-        try:
-            d = self.get_trimarea(n)
-#            r = self.val['rhombic'].get()
-        except:
-            return # 空欄など入力ミスのときは何もしない
-        d = correct_corner_angles(d,0)
-        for k in ('TRw','BLw','TRh','BLh'):
-            self.val[f'trim{n}_{k}'].set(d[k])
+    def update_autocorrection(self,n):
+        if self.val[f'type{n}'].get() == NO_USE:
+            self.wid[f'btn_autocorrect{n}'].config(state='disabled')
+        else:
+            self.wid[f'btn_autocorrect{n}'].config(state='normal')
 
-    def button_show_trimming_img(self):
+    def button_autocorrection(self,n):
         # 座標指定したトリミング範囲の図と枠線を表示
         if self.check_image is None:
             self.clear_graphs()
             return
         angle = self.val['rotate'].get()
-        current_tab = self.get_current_trimtab()
-        for n in range(MAX_TAB_NUM):
-            d = self.get_trimarea(n)
-            print(f'button_pressed.  {n}')
-            if not self.val[f'use_frame{n}'].get():
-                continue
-            # 座標を自動計算
-            if n == current_tab:
-                if self.val[f'trim{n}_auto_correction'].get():
-                    r, d = find_good_angle(self.check_image, d)
-                    # 対角の座標を自動入力
-                    for k in ('TRw','BLw','TRh','BLh'):
-                        self.val[f'trim{n}_{k}'].set(d[k])
-                trimed_image = trim_image(self.check_image,d,autocorrect=False)
-                wid, hei = d['TLw'], d['TLh']
-                self.trim_mod_x, self.trim_mod_y = wid, hei
-                name = f'trimming{n}'
-                self.ax[name].imshow(trimed_image,cmap='gray')
-                self.ax[name].xaxis.set_major_formatter(mpl.ticker.FuncFormatter(lambda x, pos: int(x+wid)))
-                self.ax[name].yaxis.set_major_formatter(mpl.ticker.FuncFormatter(lambda x, pos: int(x+hei)))
-                self.canvas[name].draw()
+        d = rd.find_good_angle(self.check_image, Corners(**self.get_trimarea(n)))
+        # 対角の座標を自動入力
+        for k in ('TRw','BLw','TRh','BLh'):
+            self.val[f'trim{n}_{k}'].set(getattr(d,k))
+
+        trimed_image = rd.calculate_thresh_auto(d.trim_image(self.check_image))
+        # テスト
+        txt, _, coordinates = rd.get_digit(self.check_image,d)
+        wid, hei = d.TLw, d.TLh
+        self.trim_mod_x, self.trim_mod_y = wid, hei
+        name = f'trimming{n}'
+        self.clear_graph(name)
+        self.ax[name].grid(False)
+        self.ax[name].imshow(trimed_image,cmap='gray')
+        self.ax[name].xaxis.set_major_formatter(mpl.ticker.FuncFormatter(lambda x, pos: int(x+wid)))
+        self.ax[name].yaxis.set_major_formatter(mpl.ticker.FuncFormatter(lambda x, pos: int(x+hei)))
+        ## show lines
+        if coordinates is not None:
+            for sxy in coordinates: # (x,x,y,y)
+                y = [sxy[0],sxy[0],sxy[1],sxy[1],sxy[0]]
+                x = [sxy[2],sxy[3],sxy[3],sxy[2],sxy[2]]
+                self.ax[name].plot(x,y,color='orange',lw=max(min(trimed_image.shape)//100, 1))
+        self.canvas[name].draw()
+        ### テキスト更新
+        self.val[f'result{n}'].set(txt)
         self.update_check_img()
     
     def update_check_img(self):
@@ -578,53 +588,33 @@ class App(tk.Frame):
         self.show_check_img()
         for n in range(MAX_TAB_NUM):
             # 使用しないなら表示しない
-            if not self.val[f'use_frame{n}'].get():
+            if self.val[f'type{n}'].get() == NO_USE:
                 continue
             d = self.get_trimarea(n)
             x = [d['TLw'],d['TRw'],d['BRw'],d['BLw'],d['TLw']]
             y = [d['TLh'],d['TRh'],d['BRh'],d['BLh'],d['TLh']]
             self.ax[name].plot(x,y,color=trimming_colors[n],marker='.',)
         self.canvas[name].draw()
-        ### self.read_testimage も実行
-
-    def read_testimage(self):
-        ######################### 未使用
-        name = 'test' ########## test 廃止
-        self.clear_graph(name)
-        # 他2つの画像がロードできているかどうかにかかわらず、一通りの処理を実行する
-        im = self.get_check_img()
-        d = self.get_trimarea()
-        
-        trimed_img = trim_image(im,d,autocorrect=False)
-        th = calculate_thresh_auto(trimed_img)
-        segs, coordinates = search_segments(th)
-        max_height = max([x[1]-x[0] for x in coordinates])
-        res = "".join([read_segment(i,max_height)[0] for i in segs])
-        self.val['result'].set(res)
-        # testに白黒化した画像を表示
-        # 検出した数字枠をtestに表示
-        self.ax[name].imshow(th,cmap='gray')
-        for sxy in coordinates: # (x,x,y,y)
-            y = [sxy[0],sxy[0],sxy[1],sxy[1],sxy[0]]
-            x = [sxy[2],sxy[3],sxy[3],sxy[2],sxy[2]]
-            self.ax[name].plot(x,y,color='r',marker='.',)
-        self.canvas[name].draw()
-        print(res)
-        print("----------")
 
     def read_alldata(self):
         savepath = Path(self.val['save_dir'].get()) / Path(self.val['save_fname'].get()+'.csv')
-        n = 0
-        d = self.get_trimarea(n)
-#        angle = self.val['rotate'].get()
-
+        angle = self.val['rotate'].get()
         results = []
+        displays_lookup = [n for n in range(MAX_TAB_NUM) if self.val[f'type{n}'].get() != NO_USE]
+        corners = {tabnum: Corners(**self.get_trimarea(tabnum)) for tabnum in displays_lookup}
+        displays = {tabnum: Display() for tabnum in displays_lookup}
+        for tabnum, d in displays.items():
+            d.set_ratio(self.check_image, corners[tabnum])
+
         mode = self.val['imgtype'].get()
         preprocess_aruco = self.val['aruco0'].get()
+        st = dt.now()
         markers = [int(x) for x in self.val['aruco0_marker'].get().split('-')]
         if mode == 'image':
             records = OrderedDict([(x, self.val[f'rec_{x}'].get()) 
-                for x in ('number','created_time','modified_time','filename','value')])
+                for x in ['number','created_time','modified_time','filename']])
+            for n in displays_lookup:
+                records[f'value{n}'] = True
             p = Path(self.val['img_dir'].get())
             os.chdir(str(p.resolve()))
             image_filelist = [t for t in p.glob('*.jpg')] + [t for t in p.glob('*.png')]
@@ -639,22 +629,24 @@ class App(tk.Frame):
                 self.val['progress_txt'].set(f'{i}/{max_num}')
                 self.wid['progress'].update()
                 im = cv2.imread(file.name,cv2.IMREAD_GRAYSCALE)
-                if preprocess_aruco:
-                    im = trim_aruco_markers(im, markers)
-                valueread, segments, coordinates = get_digit(im,d,autocorrect=False)
                 temp = {
                     'number':i,
-                    'txt':valueread,
                     'created_time':str(dt.fromtimestamp(file.stat().st_ctime)), # unix timestamp --> datetime
                     'modified_time':str(dt.fromtimestamp(file.stat().st_mtime)),
                     'filename':file.name,
-                    'segments': segments,
-                    'coordinates': coordinates,
                     }
+                if preprocess_aruco:
+                    im = rd.trim_aruco_markers(im, markers)
+                for tabnum in displays_lookup:
+                    c = displays[tabnum].get_corners_from_ratio(im)
+                    valueread, _, _ = rd.get_digit(im,c)
+                    temp[f'txt{tabnum}'] = valueread
                 results.append(temp)
         else:
             records = OrderedDict([(x, self.val[f'rec_{x}'].get()) 
-                for x in ('number','videotime','value','file_time')])
+                for x in ['number','videotime','videofiletime',]])
+            for n in displays_lookup:
+                records[f'value{n}'] = True
             if len(self.video_captures) == 0:
                 print('no video files loaded.')
                 return
@@ -672,35 +664,40 @@ class App(tk.Frame):
                 self.val['progress'].set(i)
                 self.val['progress_txt'].set(f'{i}/{max_num}')
                 self.wid['progress'].update()
-                im = get_videoimg(self.video_captures, t)
+                im = rd.get_videoimg(self.video_captures, t)
                 if preprocess_aruco:
-                    im = trim_aruco_markers(im, markers)
-                valueread, segments, coordinates = get_digit(im,d,autocorrect=False)
+                    im = rd.trim_aruco_markers(im, markers)
                 vt = round(t/tp) if tp == 60 else t
-                vt_filetime = get_videotime(self.video_captures, self.video_filelist, t)
+                vt_filetime = rd.get_videotime(self.video_captures, self.video_filelist, t)
                 temp = {
                     'number':i,
-                    'txt':valueread,
                     'videotime':vt,
-                    'file_time': vt_filetime,
-                    'segments': segments,
-                    'coordinates': coordinates,
+                    'videofiletime': vt_filetime,
                     }
+                for tabnum in displays_lookup:
+                    c = displays[tabnum].get_corners_from_ratio(im)
+                    valueread, _, _ = rd.get_digit(im,c)
+                    temp[f'txt{tabnum}'] = valueread
                 results.append(temp)
-        # max & min の参照
-        check_min = self.val[f'min{n}'].get()
-        check_max = self.val[f'max{n}'].get()
-        min_num = self.val[f'min_num{n}'].get()
-        max_num = self.val[f'max_num{n}'].get()
-        for x in results:
-            try:
-                x['value'] = float(x['txt'])
-            except:
-                x['value'] = math.nan
-            if check_min and x['value'] < min_num: # nan と数値の比較は必ず False になる
-                x['value'] = math.nan
-            if check_max and x['value'] > max_num:
-                x['value'] = math.nan
+        for num in displays_lookup:
+            valuetype = self.val[f'type{num}'].get()
+            # max & min の参照
+            check_min = self.val[f'min{num}'].get()
+            check_max = self.val[f'max{num}'].get()
+            min_num = self.val[f'min_num{num}'].get()
+            max_num = self.val[f'max_num{num}'].get()
+            for x in results:
+                if valuetype == '文字列':
+                    x[f'value{num}'] = x[f'txt{num}']
+                    continue
+                try:
+                    x[f'value{num}'] = float(x[f'txt{num}'])
+                except:
+                    x[f'value{num}'] = math.nan
+                if check_min and x[f'value{num}'] < min_num: # nan と数値の比較は必ず False になる
+                    x[f'value{num}'] = math.nan
+                if check_max and x[f'value{num}'] > max_num:
+                    x[f'value{num}'] = math.nan
         # csv 書き込み
         header = [x for x,use in records.items() if use]
         results_use = [{k:v for k,v in res.items() if k in header} for res in results]
@@ -709,17 +706,11 @@ class App(tk.Frame):
             writer.writeheader()
             writer.writerows(results_use)
         self.plt_result_x = [x['number'] for x in results]
-        self.plt_result_y = [x['value'] for x in results]
-
-        min_num = self.val[f'min_num{n}'].get()
-        max_num = self.val[f'max_num{n}'].get()
+        self.plt_result_y = [x[f'value{0}'] for x in results]# for n in displays_lookup]
 
         self.val['progress_txt'].set('complete.')
-        """
-        ### テスト中：まだエラーが出る
-        good_results_list = [(x['txt'],x['segments'],x['coordinates']) for x in results if not math.isnan(x['value'])]
-        get_better_coordinates(good_results_list)
-        """
+        en = dt.now()
+        print((en.timestamp()-st.timestamp()))
 
     def plotgraph(self):
         if len(self.plt_result_x) == len(self.plt_result_y) > 0:
@@ -728,20 +719,6 @@ class App(tk.Frame):
     def get_trimarea(self, n):
         # 座標取得
         return {f'{k}':self.val[f'trim{n}_{k}'].get() for k in FRAME_NAMES}
-
-    def update_trimarea_view(self,*args):
-        # 自動補正モードのとき座標の対角を入力不可にする
-        n = self.get_current_trimtab()
-        if self.val[f'trim{n}_auto_correction'].get() == 1:
-            st = 'disabled'
-            for k in ('TLw','TLh','BRw','BRh'):
-                self.tid[f'trim{n}_{k}'] = self.val[f'trim{n}_{k}'].trace_add('write',self.update_trim_area)
-        else:
-            st = 'normal'
-            for k in ('TLw','TLh','BRw','BRh'):
-                self.val[f'trim{n}_{k}'].trace_remove('write',self.tid[f'trim{n}_{k}'])
-        for x in ('TRw','TRh','BLw','BLh'):
-            self.wid[f'trim{n}_{x}'].config(state=st)
 
     def get_coordinate_check(self, event):
         if event.xdata is None: return
@@ -767,9 +744,19 @@ class App(tk.Frame):
     def get_current_trimtab(self):
         tab_id = self.notebook_trim.select()
         tab_txt = self.notebook_trim.tab(tab_id,'text')
-        num = int(tab_txt[-2]) -1
+        num = int(tab_txt.strip()[-1]) -1
         return num
 
+def testprint(x,y):
+    fig,ax = plt.subplots()
+    ax.tick_params(top=False,bottom=True,labeltop=False,labelbottom=True)
+    ax.set(xlabel='number')
+    ax.plot(x,y,marker='.')
+    plt.show()
+    del fig
+    del ax
+
+# region Main
 # ======================================================================
 # Main
 # ======================================================================
