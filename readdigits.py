@@ -251,6 +251,7 @@ def rotate_image(img,angle:int=0):
     return rotated_img
 
 def calculate_thresh_auto(img,morpho=True,white=255):
+    """グレースケール画像を白黒に変換"""
     arr = img
     # 全体の明るさより枠部分が明るいとき白黒反転して文字を白くする
     if (np.average(arr[0]) + np.average(arr[-1]))/2 > np.average(arr):
@@ -264,7 +265,7 @@ def calculate_thresh_auto(img,morpho=True,white=255):
     return thresh_img
 
 def __nonzerolist(in_list):
-    # in_listのゼロでない範囲start,endのリストを作成
+    """in_listのゼロでない範囲start,endのリストを作成"""
     a = []
     start_, end_ = 0, 0
     for i, x in enumerate(in_list):
@@ -283,8 +284,8 @@ def __nonzerolist(in_list):
     return a
 
 def __cut_zeros(x_array, dim=2):
+    """画像上下のゼロ（黒）部分を削除"""
     if dim == 2:
-        # 画像上下のゼロ（黒）部分を削除
         in_list = np.sum(x_array, axis=1)
     elif dim == 1:
         in_list = x_array
@@ -313,8 +314,8 @@ def trim_aruco_markers(img, aruco_ids):
     img_trimed = transform(img,trans_mat, trans_size)
     return img_trimed
 
-def search_segments(img):
-#    size = img.shape # imgがNoneでないとき
+def __search_char(img):
+    """白黒画像から文字領域を切り出し"""
     img_arr = img
     # 数字を切り離してトリミング
     # 縦に区切り--> 上下の空白を削除
@@ -324,20 +325,18 @@ def search_segments(img):
         return [], []
     #segs_tmp = [img_arr[:,x:y] for x,y in segsy]
     segsx = [__cut_zeros(img_arr[:,x[0]:x[1]]) for x in segsy]
-    segments = [img_arr[x[0]:x[1],y[0]:y[1]] for x,y in zip(segsx,segsy)]
-    coordinates = [(x[0],x[1],y[0],y[1]) for x,y in zip(segsx, segsy)]
+    segs_temp = [img_arr[x[0]:x[1],y[0]:y[1]] for x,y in zip(segsx,segsy)]
+    coor_temp = [(x[0],x[1],y[0],y[1]) for x,y in zip(segsx, segsy)]
     # あまりに小さい領域は削除
-    min_size = max([min(x.shape) for x in segments]) / 10
-    newseg, newcoo = [], []
-    for i,s in enumerate(segments):
-        if s.shape[0] > min_size and s.shape[1] > min_size:
-            newseg.append(s)
-            newcoo.append(coordinates[i])
-    return newseg, newcoo
+    min_size = max([min(x.shape) for x in segs_temp]) / 10
+    char_imgs = [s for s in segs_temp if s.shape[0] > min_size and s.shape[1] > min_size]
+    coordinates = [c for s,c in zip(segs_temp,coor_temp) if s.shape[0] > min_size and s.shape[1] > min_size]
+    return char_imgs, coordinates
 
-def read_segment(img,max_height):
+def read_char(char_img,max_height):
     # セグメント分割したパーツの数字を読む
     # return: 文字, 参考用のdigit組み合わせ
+    img = char_img
     Sheight, Swidth = img.shape
     aspect_rate = Sheight / Swidth
     wid = int(Swidth*0.05) if Swidth > 20 else 1
@@ -396,15 +395,20 @@ def get_digit(im, corners:Corners):
     trimed_img = corners.trim_image(im)
     """
     th = calculate_thresh_auto(trimed_img)
-    segs, coordinates = search_segments(th)
+    segs, coordinates = __search_char(th)
     """
-    segs, coordinates = find_dotted_coordinates(trimed_img)
+    segs, coordinates = separate_dots(trimed_img)
     max_height = max([x[1]-x[0] for x in coordinates])
-    result = [read_segment(i,max_height) for i in segs]
-    res = "".join([x[0] for x in result])
+    result = [read_char(i,max_height) for i in segs]
     segments = [x[1] for x in result]
-#    segs, coordinates = assemble_bars(res, segments, coordinates)
-    return res, segments, coordinates
+    # test
+    coordinates = assemble_bars(result, segments, coordinates)
+    print(coordinates)
+    imgs = [trimed_img[c[0]:c[1],c[2]:c[3]] for c in coordinates]
+    result = [read_char(i,max_height) for i in imgs]
+    #segments = [x[1] for x in result]
+    res = "".join([x[0] for x in result])
+    return res, coordinates
 
 # region Fine-tuning
 def find_separated_angles(original_img, corners):
@@ -452,7 +456,7 @@ def find_lines(image):
 
 def finetuning_dots(image, corners):
     """小数点を検出できるように四隅右上の座標を微調整する"""
-    txt, _, _ = get_digit(image, corners)
+    txt, _ = get_digit(image, corners)
     try:
         _ = float(txt)
         # 数値判定できて小数点が存在する場合は調整なし
@@ -467,7 +471,7 @@ def finetuning_dots(image, corners):
     for i in check:
         for key in ('TRw',): # 'BLw'):
             c2 = Corners._mod(corners,key,i)
-            txt, _, _ = get_digit(image, c2)
+            txt, _ = get_digit(image, c2)
             try:
                 _ = float(txt)
             except:
@@ -488,14 +492,14 @@ def find_good_angle(original_img,corners,type='number'):
         corners_res = finetuning_dots(original_img, corners_both)
     return corners_res
 
-def find_dotted_coordinates(trimed_img):
+def separate_dots(trimed_img):
     """数字にくっついている小数点を分割する"""
     th = calculate_thresh_auto(trimed_img)
-    char_imgs, coordinates = search_segments(th)
+    char_imgs, coordinates = __search_char(th)
     max_height = max([x[1]-x[0] for x in coordinates])
     char_imgs_, coordinates_ = [], []
     for char_img, coordinate in zip(char_imgs,coordinates):
-        ch, switch = read_segment(char_img, max_height)
+        ch, switch = read_char(char_img, max_height)
         if ch.isdigit(): # 右側のセグメントがONのとき(数字は全部そう)
             not_dots = [(len(img)-__cut_zeros(img,dim=1)[0]) > len(img)/5 for img in char_img.T]
             if all(not_dots): # not all の書き方がわからなかった
@@ -525,24 +529,23 @@ def find_dotted_coordinates(trimed_img):
         coordinates_.append(coordinate)
     return char_imgs_, coordinates_
 
+def __compare_segment(tuplea,tupleb):
+    """数字判定されたAの各セグメントがBと一致するかどうか"""
+    if not isinstance(tuplea,tuple):
+        return False
+    c = [a==b if b in (1,0) else True for a, b in zip(tuplea,tupleb)]
+    return all(c)
+
 def assemble_bars(res, segments, coordinates):
     """数字の縦棒の間隔が広く、傾き補正時に別々の領域に分離してしまう場合、本体の横棒とくっつける
     分離した棒は'' または 1 になっているはず
     """
-    # 未完成
-    def compare_segment(tuplea,tupleb):
-        """数字判定されたAの各セグメントがBと一致するかどうか"""
-        if not isinstance(tuplea,tuple):
-            return False
-        c = [a==b if b in (1,0) else True for a, b in zip(tuplea,tupleb)]
-        return all(c)
-
-    if (r not in res for r in ('','1')):
-        return res, segments, coordinates############################################################3
-
+    if not any([r in res for r in ('','1')]):
+        # 読み取れない文字や1が含まれない場合は処理しない
+        return coordinates
     pops = []
     for i, r in enumerate(res):
-        if compare_segment(segments[i],(None,0,None,None,0,None,None,)):
+        if __compare_segment(segments[i],(None,0,None,None,0,None,None,)):
             # 左の棒がないとき
             if i > 0 and res[i-1] in ('', '1'):
                 wid_self = coordinates[i][1]-coordinates[i][0]
@@ -551,7 +554,6 @@ def assemble_bars(res, segments, coordinates):
                 if gap < wid_bar and wid_bar *2 < wid_self:
                     # barが十分細くて隙間が狭いときくっつける
                     pops.append((i,-1))
-
             # 右の棒がないとき
             if i < len(res)-1 and res[i+1] in ('', '1'):
                 wid_self = coordinates[i][1]-coordinates[i][0]
@@ -559,10 +561,22 @@ def assemble_bars(res, segments, coordinates):
                 gap = coordinates[i+1][0]-coordinates[i][1]
                 if gap < wid_bar and wid_bar *2 < wid_self:
                     # barが十分細くて隙間が狭いときくっつける
-                    pops.append((i,+1))
-
-    for p in pops:
-        pass
+                    pops.append((i,0))
+    while(len(pops) > 0):
+        p = pops.pop(0)
+        main = coordinates.pop(p[0])
+        con = coordinates.pop(p[0]+p[1])
+        if p[1] == -1:
+            # 左と結合
+            res = (con[0],main[1],min((con[2],main[2])),max((con[3],main[3])))
+        else:
+            # 右と結合
+            res = (main[0],con[1],min((con[2],main[2])),max((con[3],main[3])))
+        coordinates.insert(p[0]+p[1],res)
+        for pp in pops:
+            if pp[0] > p[0]:
+                pp[0] -= 1
+    return coordinates
 
 # region Utils for Movies
 # ======================================================================
@@ -656,6 +670,4 @@ def print_aruco_markers(savedir,markerIDs:list=[0,1,2,3],base=20):
             cv2.rectangle(img_,(n,n),(max_wid-n,size_mark+fillS*2+mgn*2-n),0,thickness=1)
         fn = (Path(savedir)/Path(f"marker_{m[0]}{m[1]}.jpg")).resolve().as_posix()
         cv2.imwrite(fn,img_)
-
-
 
