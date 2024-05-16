@@ -393,10 +393,14 @@ def get_digit(im, corners:Corners):
     if im is None:
         return "", []
     trimed_img = corners.trim_image(im)
-    """
     th = calculate_thresh_auto(trimed_img)
     segs, coordinates = __search_char(th)
-    """
+    max_height = max([x[1]-x[0] for x in coordinates])
+    result = [read_char(i,max_height)[0] for i in segs]
+    print(result)
+    return result, coordinates
+
+"""def __test_():
     segs, coordinates = separate_dots(trimed_img)
     max_height = max([x[1]-x[0] for x in coordinates])
     result = [read_char(i,max_height) for i in segs]
@@ -408,7 +412,7 @@ def get_digit(im, corners:Corners):
     result = [read_char(i,max_height) for i in imgs]
     #segments = [x[1] for x in result]
     res = "".join([x[0] for x in result])
-    return res, coordinates
+    return res, coordinates"""
 
 # region Fine-tuning
 def find_separated_angles(original_img, corners):
@@ -456,11 +460,11 @@ def find_lines(image):
 
 def finetuning_dots(image, corners):
     """小数点を検出できるように四隅右上の座標を微調整する"""
-    txt, _ = get_digit(image, corners)
+    chars, _ = get_digit(image, corners)
     try:
-        _ = float(txt)
+        _ = float(''.join(chars))
         # 数値判定できて小数点が存在する場合は調整なし
-        if '.' in txt:
+        if '.' in chars:
             return corners
     except:
         pass
@@ -471,12 +475,12 @@ def finetuning_dots(image, corners):
     for i in check:
         for key in ('TRw',): # 'BLw'):
             c2 = Corners._mod(corners,key,i)
-            txt, _ = get_digit(image, c2)
+            chars, _ = get_digit(image, c2)
             try:
-                _ = float(txt)
+                _ = float(''.join(chars))
             except:
                 continue
-            if '.' in txt:
+            if '.' in chars:
                 res_dot = c2
     if res_dot is not None:
         return res_dot

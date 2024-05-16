@@ -562,7 +562,8 @@ class App(tk.Frame):
 
         trimed_image = rd.calculate_thresh_auto(d.trim_image(self.check_image))
         # テスト
-        txt, coordinates = rd.get_digit(self.check_image,d)
+        chars, coordinates = rd.get_digit(self.check_image,d)
+        txt = "".join(chars)
         wid, hei = d.TLw, d.TLh
         self.trim_mod_x, self.trim_mod_y = wid, hei
         name = f'trimming{n}'
@@ -640,7 +641,7 @@ class App(tk.Frame):
                 for tabnum in displays_lookup:
                     c = displays[tabnum].get_corners_from_ratio(im)
                     valueread, _ = rd.get_digit(im,c)
-                    temp[f'txt{tabnum}'] = valueread
+                    temp[f'txt{tabnum}'] = ''.join(valueread)
                 results.append(temp)
         else:
             records = OrderedDict([(x, self.val[f'rec_{x}'].get()) 
@@ -677,7 +678,7 @@ class App(tk.Frame):
                 for tabnum in displays_lookup:
                     c = displays[tabnum].get_corners_from_ratio(im)
                     valueread, _ = rd.get_digit(im,c)
-                    temp[f'txt{tabnum}'] = valueread
+                    temp[f'txt{tabnum}'] = ''.join(valueread)
                 results.append(temp)
         for num in displays_lookup:
             valuetype = self.val[f'type{num}'].get()
