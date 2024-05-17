@@ -415,36 +415,8 @@ def get_digit(im, corners:Corners):
     return res, coordinates"""
 
 # region Fine-tuning
-def finetuning_dots(image, corners):
-    """小数点を検出できるように四隅右上の座標を微調整する"""
-    chars, _ = get_digit(image, corners)
-    try:
-        _ = float(''.join(chars))
-        # 数値判定できて小数点が存在する場合は調整なし
-        if '.' in chars:
-            return corners
-    except:
-        pass
-    check = [i for i in range(3,9,3)]
-    check += [i for i in range(-3,-9,-3)]
-    res_num = None
-    res_dot = None
-    for i in check:
-        for key in ('TRw',): # 'BLw'):
-            c2 = Corners._mod(corners,key,i)
-            chars, _ = get_digit(image, c2)
-            try:
-                _ = float(''.join(chars))
-            except:
-                continue
-            if '.' in chars:
-                res_dot = c2
-    if res_dot is not None:
-        return res_dot
-    return corners
-
 def find_good_angle(original_img,corners,type='number'):
-    #デジタル数字の傾きがまっすぐになるように補正する
+    #デジタル数字の傾きがまっすぐになるように座標補正する
     #文字が縦に揃うとき、縦の和がゼロになる列数が最も多いと思われる
     zero_num_list = []
     angle_range = range(-11,21)
@@ -484,7 +456,7 @@ def find_good_angle(original_img,corners,type='number'):
     corners_res = Corners._correct_angles(corners,angle_bg - angle_lines)
     if type == 'number':
         # 小数点を含む場合はさらに補正
-        chars, _ = get_digit(original_img, corners)
+        chars, _ = get_digit(original_img, corners_res)
         try:
             _ = float(''.join(chars))
             # 数値判定できて小数点が存在する場合は調整なし
@@ -497,7 +469,7 @@ def find_good_angle(original_img,corners,type='number'):
         # 小数点を検出できるように四隅右上の座標を微調整する
         for i in check:
             for key in ('TRw',): # 'BLw'):
-                c2 = Corners._mod(corners,key,i)
+                c2 = Corners._mod(corners_res,key,i)
                 chars, _ = get_digit(original_img, c2)
                 try:
                     _ = float(''.join(chars))
@@ -506,7 +478,7 @@ def find_good_angle(original_img,corners,type='number'):
                 if '.' in chars:
                     res_dot = c2
         if res_dot is not None:
-            return res_dot
+            corners_res = res_dot
     return corners_res
 
 def separate_dots(trimed_img):
