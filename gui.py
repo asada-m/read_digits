@@ -290,7 +290,7 @@ class App(tk.Frame):
             ff = ttk.Frame(f)
 #            fff = tk.Frame(ff,background='red')
             fff = tk.Frame(ff)
-            w = ttk.Combobox(fff,width=10,values=[NO_USE,'数値','指数部'],textvariable=self.val[f'type{x}'],state='readonly')
+            w = ttk.Combobox(fff,width=10,values=[NO_USE,'数値','指数部','文字列'],textvariable=self.val[f'type{x}'],state='readonly')
             w.pack(**pads4,side=tk.LEFT)
             fff.pack()
             name = f'trimming{x}'
@@ -562,8 +562,7 @@ class App(tk.Frame):
 
         trimed_image = rd.calculate_thresh_auto(d.trim_image(self.check_image))
         # テスト
-        chars, coordinates = rd.get_digit(self.check_image,d)
-        txt = "".join(chars)
+        txt, _, coordinates = rd.get_digit(self.check_image,d)
         wid, hei = d.TLw, d.TLh
         self.trim_mod_x, self.trim_mod_y = wid, hei
         name = f'trimming{n}'
@@ -640,8 +639,8 @@ class App(tk.Frame):
                     im = rd.trim_aruco_markers(im, markers)
                 for tabnum in displays_lookup:
                     c = displays[tabnum].get_corners_from_ratio(im)
-                    valueread, _ = rd.get_digit(im,c)
-                    temp[f'txt{tabnum}'] = ''.join(valueread)
+                    valueread, _, _ = rd.get_digit(im,c)
+                    temp[f'txt{tabnum}'] = valueread
                 results.append(temp)
         else:
             records = OrderedDict([(x, self.val[f'rec_{x}'].get()) 
@@ -677,8 +676,8 @@ class App(tk.Frame):
                     }
                 for tabnum in displays_lookup:
                     c = displays[tabnum].get_corners_from_ratio(im)
-                    valueread, _ = rd.get_digit(im,c)
-                    temp[f'txt{tabnum}'] = ''.join(valueread)
+                    valueread, _, _ = rd.get_digit(im,c)
+                    temp[f'txt{tabnum}'] = valueread
                 results.append(temp)
         for num in displays_lookup:
             valuetype = self.val[f'type{num}'].get()
