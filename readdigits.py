@@ -415,49 +415,6 @@ def get_digit(im, corners:Corners):
     return res, coordinates"""
 
 # region Fine-tuning
-def find_separated_angles(original_img, corners):
-    """デジタル数字の傾きがまっすぐになるように補正する
-    文字が縦に揃うとき、縦の和がゼロになる列数が最も多いと思われる"""
-    zero_num_list = []
-    angle_range = range(-11,21)
-    for r in angle_range:
-        dd = Corners._correct_angles(corners,r)
-        im_trim = dd.trim_image(original_img)
-        th = calculate_thresh_auto(im_trim)
-        tate_wa = np.sum(th,axis=0)
-        #yoko_wa = np.sum(th,axis=1)
-        zeros_t = len(tate_wa)-np.count_nonzero(tate_wa)
-        #zeros_y = len(yoko_wa)-np.count_nonzero(yoko_wa)
-        zero_num_list.append(zeros_t)
-    zero_angles = [r for r,x in zip(angle_range, zero_num_list) if x == max(zero_num_list)]
-    return round(np.average(zero_angles))
-
-def find_lines(image):
-    """直線検出"""
-    im = calculate_thresh_auto(image)
-    # 上下の黒い背景を削除
-    bg = __cut_zeros(im)
-    im = im[bg[0]:bg[1]]
-    im = cv2.Canny(im, threshold1=10,threshold2=10,apertureSize=3)
-    tatesize = im.shape[0]
-    deg = 0
-    HoughLine_params = {
-        'rho': 1, # default
-        'theta': np.pi/360, # default
-        'threshold': max((tatesize//50, 2)), # 線として検出する点数
-        'maxLineGap': max((tatesize//30, 1)), # 同一の線とみなす点の間隔
-        }
-    for minlinedev in (4, 6, 8):
-        HoughLine_params['minLineLength'] = tatesize//minlinedev # 線として検出する最小長さ
-        lines = cv2.HoughLinesP(im,**HoughLine_params)
-        if lines is not None and len(lines) > 0:
-            angles = [90 - math.atan2((L[0][3]-L[0][1]),(L[0][2]-L[0][0]))*(180/math.pi) for L in lines]
-            angles_vertical = [a for a in angles if abs(a) < 15]
-            if len(angles_vertical) > 0:
-                deg = round(np.average(angles_vertical))
-                break
-    return deg, lines
-
 def finetuning_dots(image, corners):
     """小数点を検出できるように四隅右上の座標を微調整する"""
     chars, _ = get_digit(image, corners)
@@ -487,13 +444,46 @@ def finetuning_dots(image, corners):
     return corners
 
 def find_good_angle(original_img,corners,type='number'):
-    angle_bg = find_separated_angles(original_img, corners)
+    #デジタル数字の傾きがまっすぐになるように補正する
+    #文字が縦に揃うとき、縦の和がゼロになる列数が最も多いと思われる
+    zero_num_list = []
+    angle_range = range(-11,21)
+    for r in angle_range:
+        dd = Corners._correct_angles(corners,r)
+        im_trim = dd.trim_image(original_img)
+        th = calculate_thresh_auto(im_trim)
+        tate_wa = np.sum(th,axis=0)
+        #yoko_wa = np.sum(th,axis=1)
+        zeros_t = len(tate_wa)-np.count_nonzero(tate_wa)
+        #zeros_y = len(yoko_wa)-np.count_nonzero(yoko_wa)
+        zero_num_list.append(zeros_t)
+    zero_angles = [r for r,x in zip(angle_range, zero_num_list) if x == max(zero_num_list)]
+    angle_bg = round(np.average(zero_angles))
     corners_bg = Corners._correct_angles(corners,angle_bg)
-    angle_lines, _ = find_lines(corners_bg.trim_image(original_img))
-    corners_both = Corners._correct_angles(corners,angle_bg - angle_lines)
-    corners_res = corners_both
+    # 直線検出して傾き補正
+    im = calculate_thresh_auto(corners_bg.trim_image(original_img))
+    bg = __cut_zeros(im)
+    im = cv2.Canny(im[bg[0]:bg[1]], threshold1=10,threshold2=10,apertureSize=3)
+    tatesize = im.shape[0]
+    angle_lines = 0
+    HoughLine_params = {
+        'rho': 1, # default
+        'theta': np.pi/360, # default
+        'threshold': max((tatesize//50, 2)), # 線として検出する点数
+        'maxLineGap': max((tatesize//30, 1)), # 同一の線とみなす点の間隔
+        }
+    for minlinedev in (4, 6, 8):
+        HoughLine_params['minLineLength'] = tatesize//minlinedev # 線として検出する最小長さ
+        lines = cv2.HoughLinesP(im,**HoughLine_params)
+        if lines is not None and len(lines) > 0:
+            angles = [90 - math.atan2((L[0][3]-L[0][1]),(L[0][2]-L[0][0]))*(180/math.pi) for L in lines]
+            angles_vertical = [a for a in angles if abs(a) < 15]
+            if len(angles_vertical) > 0:
+                angle_lines = round(np.average(angles_vertical))
+                break
+    corners_res = Corners._correct_angles(corners,angle_bg - angle_lines)
     if type == 'number':
-        corners_res = finetuning_dots(original_img, corners_both)
+        corners_res = finetuning_dots(original_img, corners_res)
     return corners_res
 
 def separate_dots(trimed_img):
