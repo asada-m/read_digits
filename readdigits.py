@@ -483,7 +483,30 @@ def find_good_angle(original_img,corners,type='number'):
                 break
     corners_res = Corners._correct_angles(corners,angle_bg - angle_lines)
     if type == 'number':
-        corners_res = finetuning_dots(original_img, corners_res)
+        # 小数点を含む場合はさらに補正
+        chars, _ = get_digit(original_img, corners)
+        try:
+            _ = float(''.join(chars))
+            # 数値判定できて小数点が存在する場合は調整なし
+            if '.' in chars:
+                return corners_res
+        except:
+            pass
+        check = [i for i in range(3,9,3)] + [i for i in range(-3,-9,-3)]
+        res_dot = None
+        # 小数点を検出できるように四隅右上の座標を微調整する
+        for i in check:
+            for key in ('TRw',): # 'BLw'):
+                c2 = Corners._mod(corners,key,i)
+                chars, _ = get_digit(original_img, c2)
+                try:
+                    _ = float(''.join(chars))
+                except:
+                    continue
+                if '.' in chars:
+                    res_dot = c2
+        if res_dot is not None:
+            return res_dot
     return corners_res
 
 def separate_dots(trimed_img):
